@@ -1,0 +1,440 @@
+# =============================================================================
+# KPI Definitions Seed — Accounting Center
+# =============================================================================
+# Seeded into kpi_definitions on first `db:migrate`.
+# Tier 1: Operational — minute/hour cadence, frontline health
+# Tier 2: Tactical   — daily/weekly, product performance
+# Tier 3: Strategic  — weekly/monthly, business outcomes
+#
+# Every KPI must have: tier, unit, cadence, formula, owner, targets.
+# Changing a formula REQUIRES a new version number.
+# =============================================================================
+
+version: 1
+
+kpis:
+
+  # ---------------------------------------------------------------------------
+  # TRUSTSYNC (Phase 1)
+  # ---------------------------------------------------------------------------
+  - id: trustsync.balance.variance_usd
+    version: 1
+    display_name: Trust balance variance
+    tier: operational
+    unit: usd
+    cadence: daily
+    product: trustsync
+    owner_role: accounting-controller
+    formula_language: sql
+    formula: |
+      SELECT COALESCE(SUM(variance), 0)
+      FROM trust_balance_snapshots
+      WHERE snapshot_date = CURRENT_DATE
+    source_tables: [trust_balance_snapshots]
+    target_direction: band
+    band_low: -500
+    band_high: 500
+    target_yellow: 2000
+    description: Bank balance minus required trust balance. 0 is ideal; >$2K triggers yellow.
+
+  - id: trustsync.breach.open_count
+    version: 1
+    display_name: Open trust breaches
+    tier: operational
+    unit: count
+    cadence: realtime
+    product: trustsync
+    owner_role: coo
+    formula: |
+      SELECT COUNT(*) FROM trust_breaches WHERE status = 'open'
+    source_tables: [trust_breaches]
+    target_direction: lower_is_better
+    target_green: 0
+    target_yellow: 0
+    description: Any open breach is a critical state. Target must be 0.
+
+  - id: trustsync.transfer.cycle_time_hours
+    version: 1
+    display_name: Transfer cycle time (proposal → settled)
+    tier: tactical
+    unit: hours
+    cadence: daily
+    product: trustsync
+    owner_role: accounting-controller
+    formula: |
+      SELECT AVG(EXTRACT(EPOCH FROM (settled_at - proposed_at))/3600)
+      FROM trust_transfers
+      WHERE settled_at >= NOW() - INTERVAL '7 days'
+    source_tables: [trust_transfers]
+    target_direction: lower_is_better
+    target_green: 24
+    target_yellow: 48
+    description: 7-day rolling average. Slower = compliance risk accumulating.
+
+  - id: trustsync.reconciliation.unmatched_count
+    version: 1
+    display_name: Unmatched reconciliation items
+    tier: operational
+    unit: count
+    cadence: daily
+    product: trustsync
+    owner_role: accounting-controller
+    formula: |
+      SELECT COALESCE(SUM(unmatched_count), 0)
+      FROM trust_reconciliations
+      WHERE as_of_date = CURRENT_DATE - 1
+    source_tables: [trust_reconciliations]
+    target_direction: lower_is_better
+    target_green: 0
+    target_yellow: 5
+
+  # ---------------------------------------------------------------------------
+  # OTAAUDITOR (Phase 2)
+  # ---------------------------------------------------------------------------
+  - id: otaauditor.match_rate_pct
+    version: 1
+    display_name: OTA line-item match rate
+    tier: tactical
+    unit: percent
+    cadence: daily
+    product: otaauditor
+    owner_role: accounting-controller
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 100
+             ELSE 100.0 * SUM(CASE WHEN match_status IN ('matched','manually_matched') THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM ota_payout_line_items li
+      JOIN ota_payout_reports r ON r.report_id = li.report_id
+      WHERE r.ingested_at >= NOW() - INTERVAL '7 days'
+    source_tables: [ota_payout_line_items, ota_payout_reports]
+    target_direction: higher_is_better
+    target_green: 98
+    target_yellow: 95
+
+  - id: otaauditor.variance_rate_pct
+    version: 1
+    display_name: Payout variance rate
+    tier: tactical
+    unit: percent
+    cadence: daily
+    product: otaauditor
+    owner_role: accounting-controller
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 0
+             ELSE 100.0 * SUM(CASE WHEN variance_flagged THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM ota_payout_line_items
+      WHERE report_id IN (
+        SELECT report_id FROM ota_payout_reports WHERE ingested_at >= NOW() - INTERVAL '7 days'
+      )
+    source_tables: [ota_payout_line_items]
+    target_direction: lower_is_better
+    target_green: 2
+    target_yellow: 5
+
+  - id: otaauditor.unmatched_dollars
+    version: 1
+    display_name: Unmatched dollars (rolling 30d)
+    tier: tactical
+    unit: usd
+    cadence: daily
+    product: otaauditor
+    owner_role: accounting-controller
+    formula: |
+      SELECT COALESCE(SUM(net_amount), 0)
+      FROM ota_payout_line_items li
+      JOIN ota_payout_reports r ON r.report_id = li.report_id
+      WHERE match_status = 'unmatched'
+        AND r.ingested_at >= NOW() - INTERVAL '30 days'
+    source_tables: [ota_payout_line_items, ota_payout_reports]
+    target_direction: lower_is_better
+    target_green: 1000
+    target_yellow: 5000
+
+  # ---------------------------------------------------------------------------
+  # REVPOST (Phase 3)
+  # ---------------------------------------------------------------------------
+  - id: revpost.post_success_rate_pct
+    version: 1
+    display_name: JE post success rate
+    tier: operational
+    unit: percent
+    cadence: hourly
+    product: revpost
+    owner_role: accounting-controller
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 100
+             ELSE 100.0 * SUM(CASE WHEN status='posted' THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM journal_entries
+      WHERE posting_date >= CURRENT_DATE - 7
+    source_tables: [journal_entries]
+    target_direction: higher_is_better
+    target_green: 99
+    target_yellow: 97
+
+  - id: revpost.je_age_median_hours
+    version: 1
+    display_name: JE age (drafted→posted, median)
+    tier: tactical
+    unit: hours
+    cadence: daily
+    product: revpost
+    owner_role: accounting-controller
+    formula: |
+      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
+        ORDER BY EXTRACT(EPOCH FROM (posted_at - created_at))/3600
+      )
+      FROM journal_entries
+      WHERE posted_at >= NOW() - INTERVAL '7 days'
+    source_tables: [journal_entries]
+    target_direction: lower_is_better
+    target_green: 4
+    target_yellow: 24
+
+  - id: revpost.pending_approval_count
+    version: 1
+    display_name: JEs pending approval
+    tier: operational
+    unit: count
+    cadence: realtime
+    product: revpost
+    owner_role: accounting-controller
+    formula: |
+      SELECT COUNT(*) FROM journal_entries WHERE status = 'pending_approval'
+    source_tables: [journal_entries]
+    target_direction: lower_is_better
+    target_green: 5
+    target_yellow: 15
+
+  # ---------------------------------------------------------------------------
+  # CHARGEBACK (Phase 4)
+  # ---------------------------------------------------------------------------
+  - id: chargeback.win_rate_pct
+    version: 1
+    display_name: Dispute win rate (trailing 90d)
+    tier: strategic
+    unit: percent
+    cadence: weekly
+    product: chargeback
+    owner_role: coo
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 0
+             ELSE 100.0 * SUM(CASE WHEN outcome='won' THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM chargeback_cases
+      WHERE decided_at >= NOW() - INTERVAL '90 days'
+        AND stage IN ('won','lost','accepted')
+    source_tables: [chargeback_cases]
+    target_direction: higher_is_better
+    target_green: 70
+    target_yellow: 55
+
+  - id: chargeback.loss_rate_bps
+    version: 1
+    display_name: Chargeback loss rate (bps of gross revenue)
+    tier: strategic
+    unit: ratio
+    cadence: monthly
+    product: chargeback
+    owner_role: coo
+    formula: |
+      -- basis points of gross revenue lost to chargebacks
+      SELECT COALESCE(SUM(final_loss), 0) * 10000.0 /
+             NULLIF((SELECT SUM(gross_amount) FROM ota_payout_reports
+                     WHERE payout_date >= NOW() - INTERVAL '90 days'), 0)
+      FROM chargeback_cases
+      WHERE decided_at >= NOW() - INTERVAL '90 days'
+    source_tables: [chargeback_cases, ota_payout_reports]
+    target_direction: lower_is_better
+    target_green: 10
+    target_yellow: 25
+
+  - id: chargeback.evidence_submitted_on_time_pct
+    version: 1
+    display_name: Evidence submitted on-time
+    tier: tactical
+    unit: percent
+    cadence: weekly
+    product: chargeback
+    owner_role: accounting-controller
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 100
+             ELSE 100.0 * SUM(CASE WHEN decided_at IS NOT NULL AND decided_at <= evidence_due_at THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM chargeback_cases
+      WHERE evidence_due_at IS NOT NULL
+        AND notified_at >= NOW() - INTERVAL '30 days'
+    source_tables: [chargeback_cases]
+    target_direction: higher_is_better
+    target_green: 100
+    target_yellow: 95
+
+  # ---------------------------------------------------------------------------
+  # UTILITY (Phase 5)
+  # ---------------------------------------------------------------------------
+  - id: utility.auto_apply_rate_pct
+    version: 1
+    display_name: Utility auto-apply rate
+    tier: tactical
+    unit: percent
+    cadence: weekly
+    product: utility
+    owner_role: accounting-controller
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 0
+             ELSE 100.0 * SUM(CASE WHEN method IN ('auto_repeat','auto_trusted') THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM utility_credit_applications
+      WHERE applied_at >= NOW() - INTERVAL '30 days'
+    source_tables: [utility_credit_applications]
+    target_direction: higher_is_better
+    target_green: 70
+    target_yellow: 50
+
+  - id: utility.variance_flag_count
+    version: 1
+    display_name: Open utility variance flags
+    tier: operational
+    unit: count
+    cadence: hourly
+    product: utility
+    owner_role: accounting-controller
+    formula: |
+      SELECT COUNT(*) FROM utility_variance_flags WHERE status = 'open'
+    source_tables: [utility_variance_flags]
+    target_direction: lower_is_better
+    target_green: 2
+    target_yellow: 10
+
+  - id: utility.bill_aging_over_due_count
+    version: 1
+    display_name: Past-due bills still unapplied
+    tier: operational
+    unit: count
+    cadence: daily
+    product: utility
+    owner_role: accounting-controller
+    formula: |
+      SELECT COUNT(*) FROM utility_bills
+      WHERE due_date < CURRENT_DATE
+        AND status NOT IN ('applied','void','written_off')
+    source_tables: [utility_bills]
+    target_direction: lower_is_better
+    target_green: 0
+    target_yellow: 3
+
+  # ---------------------------------------------------------------------------
+  # CENTER / CROSS-PRODUCT
+  # ---------------------------------------------------------------------------
+  - id: center.audit.chain_integrity
+    version: 1
+    display_name: Audit chain integrity
+    tier: operational
+    unit: bool
+    cadence: daily
+    product: center
+    owner_role: coo
+    formula: |
+      SELECT chain_valid FROM audit_chain_verification
+      ORDER BY verified_at DESC LIMIT 1
+    source_tables: [audit_chain_verification]
+    target_direction: higher_is_better
+    target_green: 1
+    target_yellow: 1
+    description: Nightly hash-chain scan. Any false = critical.
+
+  - id: center.approvals.pending_count
+    version: 1
+    display_name: Pending approvals (all products)
+    tier: operational
+    unit: count
+    cadence: realtime
+    product: center
+    owner_role: coo
+    formula: |
+      SELECT COUNT(*) FROM approvals WHERE status = 'pending'
+    source_tables: [approvals]
+    target_direction: lower_is_better
+    target_green: 10
+    target_yellow: 30
+
+  - id: center.approvals.median_age_hours
+    version: 1
+    display_name: Pending approval median age (hours)
+    tier: tactical
+    unit: hours
+    cadence: hourly
+    product: center
+    owner_role: coo
+    formula: |
+      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
+        ORDER BY EXTRACT(EPOCH FROM (NOW() - requested_at))/3600
+      )
+      FROM approvals WHERE status = 'pending'
+    source_tables: [approvals]
+    target_direction: lower_is_better
+    target_green: 4
+    target_yellow: 12
+
+  - id: center.close.bd_to_complete
+    version: 1
+    display_name: Business days to close month
+    tier: strategic
+    unit: days
+    cadence: monthly
+    product: center
+    owner_role: coo
+    formula: |
+      SELECT EXTRACT(DAY FROM (actual_close_date - period_end))
+      FROM close_cycles
+      WHERE status = 'completed'
+      ORDER BY period_end DESC LIMIT 1
+    source_tables: [close_cycles]
+    target_direction: lower_is_better
+    target_green: 5
+    target_yellow: 7
+
+  - id: center.events.throughput_per_minute
+    version: 1
+    display_name: Event bus throughput
+    tier: operational
+    unit: count
+    cadence: realtime
+    product: center
+    owner_role: accounting-controller
+    formula: |
+      SELECT COUNT(*) FROM events
+      WHERE occurred_at >= NOW() - INTERVAL '5 minutes'
+    source_tables: [events]
+    target_direction: band
+    band_low: 1
+    band_high: 2000
+    target_yellow: 5000
+    description: Both anomalously low (stall) and high (runaway) are flags.
+
+  - id: center.events.failed_rate_pct
+    version: 1
+    display_name: Event failure rate
+    tier: operational
+    unit: percent
+    cadence: hourly
+    product: center
+    owner_role: accounting-controller
+    formula: |
+      SELECT
+        CASE WHEN COUNT(*)=0 THEN 0
+             ELSE 100.0 * SUM(CASE WHEN status IN ('failed','dead_lettered') THEN 1 ELSE 0 END) / COUNT(*)
+        END
+      FROM events
+      WHERE occurred_at >= NOW() - INTERVAL '1 hour'
+    source_tables: [events]
+    target_direction: lower_is_better
+    target_green: 0.1
+    target_yellow: 1.0

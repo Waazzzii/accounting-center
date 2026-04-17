@@ -1,0 +1,99 @@
+# =============================================================================
+# Thresholds & Hysteresis — Accounting Center
+# =============================================================================
+# Shared thresholds for health-monitor, alert-router, and KPI bands.
+# Keep these in one place so ops can tune without a code change.
+# =============================================================================
+
+version: 1
+
+health:
+  hysteresis:
+    # Consecutive samples needed for a state transition
+    green_to_yellow_bad_samples: 2
+    yellow_to_red_bad_samples: 3
+    red_to_yellow_good_samples: 3
+    yellow_to_green_good_samples: 5
+    # A single critical sample skips straight to red
+    critical_sample_forces_red: true
+
+  probe_cadence_seconds:
+    column-bank: 120
+    streamline: 180
+    intacct: 300
+    stripe: 300
+    self: 60
+
+  timeouts_ms:
+    column-bank: 5000
+    streamline: 8000
+    intacct: 10000
+    stripe: 5000
+    self: 2000
+
+alerts:
+  dedup_windows_seconds:
+    critical: 60
+    error: 300
+    warn: 1800
+    info: 21600        # 6h
+
+  escalation:
+    enabled: true
+    level_1_minutes: 15     # no ack in 15m → escalate to tier 2
+    level_2_minutes: 30     # no ack in 30m → escalate to COO
+    max_level: 3
+
+  channel_preference:
+    critical: [slack, email, sms]
+    error: [slack, email]
+    warn: [slack]
+    info: [slack]
+
+close:
+  target_close_business_day: 5
+  warn_if_behind_by_business_days: 1
+  hard_block_if_behind_by_business_days: 3
+  trial_balance_tolerance_usd: 0.01   # effectively zero
+
+trustsync:
+  transfer_auto_cap_usd: 10000        # above this, human approval mandatory even for trusted agents
+  breach_thresholds:
+    shortfall_usd: 500                # >$500 shortfall = breach
+    commingling_usd: 0                # any commingling = breach
+    stale_holding_days: 45
+  reconciliation_tolerance_usd: 1.00
+
+otaauditor:
+  variance_flag_thresholds:
+    pct: 2.0                          # ≥2% variance from expected_net
+    usd: 25.00                        # OR ≥$25 absolute
+  match_confidence_min: 0.85
+
+revpost:
+  posting_retry_backoff_seconds: [30, 120, 600, 1800, 7200]
+  approval_auto_expire_hours: 72
+  dollar_thresholds_requiring_coo_approval:
+    default: 5000
+    trust_transfer: 25000
+
+chargeback:
+  evidence_due_buffer_days: 2         # submit 2 days before due, never later
+  reserve_method: rolling_90d_loss_rate
+  reserve_safety_factor: 1.2          # reserve = 1.2x of base estimate
+
+utility:
+  variance_thresholds:
+    pct: 40                           # bill is 40% over trailing 12mo avg
+    usd: 100                          # OR $100 absolute
+  auto_apply_max_without_approval_usd: 500
+  building_trust_notification_minimum_hours: 24
+
+events:
+  max_retry_attempts: 5
+  retry_backoff_seconds: [10, 30, 120, 600, 3600]
+  dead_letter_after_seconds: 86400    # 24h
+
+kpi:
+  recompute_jitter_seconds: 30
+  snapshot_retention_days: 730        # 2 years hot; archived after

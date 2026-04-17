@@ -1,0 +1,461 @@
+# =============================================================================
+# Event Catalog — Accounting Center
+# =============================================================================
+# Every cross-agent message type is declared here. The orchestrator refuses
+# to dispatch events whose event_type is not in this catalog. Add new types
+# only via PR review.
+#
+# Naming convention: `<product>.<entity>.<verb>` e.g. `trustsync.transfer.completed`
+#
+# Fields per event:
+#   type         — canonical event_type (dot-delimited)
+#   source       — product that emits it
+#   description  — plain-language purpose
+#   payload      — zod schema reference (TS)
+#   consumers    — expected subscribers
+#   idempotency  — how dedup is computed
+#   version      — schema version (integer)
+# =============================================================================
+
+version: 1
+schema_version: 1
+
+events:
+
+  # ---------------------------------------------------------------------------
+  # CENTER / ORCHESTRATOR
+  # ---------------------------------------------------------------------------
+  - type: center.orchestrator.tick
+    source: center
+    version: 1
+    description: Heartbeat from accounting-orchestrator (every 60s).
+    payload: OrchestratorTickPayload
+    consumers: [health-monitor]
+    idempotency: tick_id
+    severity: info
+
+  - type: center.orchestrator.paused
+    source: center
+    version: 1
+    description: A product or agent was paused (kill-switch, maintenance, etc.).
+    payload: OrchestratorPauseEvent
+    consumers: [alert-router, audit-log-reader, dashboard-builder]
+    idempotency: flag_id + set_at
+    severity: warn
+
+  - type: center.orchestrator.resumed
+    source: center
+    version: 1
+    description: A paused product or agent was resumed.
+    consumers: [alert-router, audit-log-reader, dashboard-builder]
+    idempotency: flag_id + set_at
+    severity: info
+
+  - type: center.approval.requested
+    source: center
+    version: 1
+    description: An agent has queued a human approval.
+    payload: ApprovalRequestedEvent
+    consumers: [alert-router, dashboard-builder]
+    idempotency: approval_id
+    severity: info
+
+  - type: center.approval.decided
+    source: center
+    version: 1
+    description: An approval was approved/rejected/expired.
+    payload: ApprovalDecidedEvent
+    consumers: [requesting agent, audit-log-reader]
+    idempotency: approval_id + decided_at
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # KPI
+  # ---------------------------------------------------------------------------
+  - type: kpi.snapshot.written
+    source: center
+    version: 1
+    description: A new KPI snapshot landed. Dashboards and alert rules consult.
+    payload: KpiSnapshotWrittenEvent
+    consumers: [dashboard-builder, alert-router, cross-product-reporter]
+    idempotency: snapshot_id
+    severity: info
+
+  - type: kpi.recompute.requested
+    source: center
+    version: 1
+    description: An agent or human requested a KPI recompute.
+    payload: KpiRecomputeRequestedEvent
+    consumers: [kpi-computer]
+    idempotency: kpi_id + period_end + requested_at
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # HEALTH
+  # ---------------------------------------------------------------------------
+  - type: health.state.changed
+    source: center
+    version: 1
+    description: A (product, dependency, region) transitioned green/yellow/red.
+    payload: HealthStateChangedEvent
+    consumers: [alert-router, dashboard-builder, audit-log-reader]
+    idempotency: health_key + state + state_since
+    severity: warn
+
+  - type: health.incident.opened
+    source: center
+    version: 1
+    description: An incident was opened on state degradation.
+    consumers: [alert-router, dashboard-builder]
+    idempotency: incident_id
+    severity: error
+
+  - type: health.incident.closed
+    source: center
+    version: 1
+    description: An incident was closed on return to green.
+    consumers: [alert-router, dashboard-builder, audit-log-reader]
+    idempotency: incident_id + closed_at
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # ALERTS
+  # ---------------------------------------------------------------------------
+  - type: alert.raised
+    source: center
+    version: 1
+    description: A new alert is being routed (fingerprinted; may dedup).
+    payload: AlertRaisedEvent
+    consumers: [alert-router]
+    idempotency: fingerprint + window
+    severity: variable
+
+  - type: alert.delivered
+    source: center
+    version: 1
+    description: Alert dispatched to channels. Tracks outbound.
+    consumers: [audit-log-reader, dashboard-builder]
+    idempotency: alert_id
+    severity: info
+
+  - type: alert.acked
+    source: center
+    version: 1
+    description: A human ack'd an alert.
+    consumers: [audit-log-reader, alert-router]
+    idempotency: alert_id + ack_at
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # TRUSTSYNC (Phase 1)
+  # ---------------------------------------------------------------------------
+  - type: trustsync.balance.snapshotted
+    source: trustsync
+    version: 1
+    description: Daily trust balance snapshot computed.
+    payload: TrustBalanceSnapshotEvent
+    consumers: [kpi-computer, health-monitor, dashboard-builder]
+    idempotency: snapshot_id
+    severity: info
+
+  - type: trustsync.breach.detected
+    source: trustsync
+    version: 1
+    description: Compliance breach detected; requires human action.
+    payload: TrustBreachDetectedEvent
+    consumers: [alert-router, audit-log-reader, dashboard-builder]
+    idempotency: breach_id
+    severity: critical
+
+  - type: trustsync.breach.resolved
+    source: trustsync
+    version: 1
+    description: Breach remediated or declared false-positive.
+    consumers: [alert-router, audit-log-reader]
+    idempotency: breach_id + resolved_at
+    severity: info
+
+  - type: trustsync.transfer.proposed
+    source: trustsync
+    version: 1
+    description: Agent proposed a trust transfer (queues approval).
+    payload: TransferProposedEvent
+    consumers: [center.approvals, dashboard-builder]
+    idempotency: transfer.idempotency_key
+    severity: info
+
+  - type: trustsync.transfer.submitted
+    source: trustsync
+    version: 1
+    description: Approved transfer sent to Column Bank.
+    consumers: [health-monitor, audit-log-reader]
+    idempotency: transfer_id + submitted_at
+    severity: info
+
+  - type: trustsync.transfer.settled
+    source: trustsync
+    version: 1
+    description: Bank confirmed transfer settlement.
+    consumers: [revpost, kpi-computer, dashboard-builder]
+    idempotency: transfer_id + settled_at
+    severity: info
+
+  - type: trustsync.transfer.failed
+    source: trustsync
+    version: 1
+    description: Transfer failed at bank or pre-submit.
+    consumers: [alert-router, health-monitor]
+    idempotency: transfer_id + failed_at
+    severity: error
+
+  - type: trustsync.reconciliation.completed
+    source: trustsync
+    version: 1
+    description: Daily bank↔ledger reconciliation finished.
+    consumers: [kpi-computer, health-monitor, dashboard-builder]
+    idempotency: reconciliation_id
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # OTAAUDITOR (Phase 2)
+  # ---------------------------------------------------------------------------
+  - type: otaauditor.payout.ingested
+    source: otaauditor
+    version: 1
+    description: Raw payout report ingested from an OTA channel.
+    payload: PayoutIngestedEvent
+    consumers: [audit-log-reader]
+    idempotency: report_id
+    severity: info
+
+  - type: otaauditor.payout.parsed
+    source: otaauditor
+    version: 1
+    description: Line items extracted and structured.
+    consumers: []
+    idempotency: report_id + parsed_at
+    severity: info
+
+  - type: otaauditor.payout.matched
+    source: otaauditor
+    version: 1
+    description: Line items matched to Streamline reservations.
+    consumers: [dashboard-builder]
+    idempotency: report_id + matched_at
+    severity: info
+
+  - type: otaauditor.variance.flagged
+    source: otaauditor
+    version: 1
+    description: A line item variance exceeded threshold.
+    payload: OtaVarianceFlaggedEvent
+    consumers: [alert-router, dashboard-builder]
+    idempotency: line_item_id
+    severity: warn
+
+  - type: otaauditor.reconciliation.finalized
+    source: otaauditor
+    version: 1
+    description: Packet ready for RevPost to produce JEs.
+    payload: OtaPacketFinalizedEvent
+    consumers: [revpost, kpi-computer]
+    idempotency: packet_id
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # REVPOST (Phase 3)
+  # ---------------------------------------------------------------------------
+  - type: revpost.je.drafted
+    source: revpost
+    version: 1
+    description: JE drafted and waiting for review.
+    payload: JeDraftedEvent
+    consumers: [dashboard-builder]
+    idempotency: je.idempotency_key
+    severity: info
+
+  - type: revpost.je.approved
+    source: revpost
+    version: 1
+    description: JE approved; eligible to post.
+    consumers: []
+    idempotency: je_id + approved_at
+    severity: info
+
+  - type: revpost.je.posted
+    source: revpost
+    version: 1
+    description: JE accepted by Sage Intacct.
+    payload: JePostedEvent
+    consumers: [kpi-computer, dashboard-builder, audit-log-reader, close-orchestrator]
+    idempotency: je_id + intacct_je_id
+    severity: info
+
+  - type: revpost.je.failed
+    source: revpost
+    version: 1
+    description: JE failed to post; Intacct error.
+    consumers: [alert-router, health-monitor]
+    idempotency: je_id + attempt_number
+    severity: error
+
+  - type: revpost.je.reversed
+    source: revpost
+    version: 1
+    description: JE reversed via a reversing entry.
+    consumers: [audit-log-reader, kpi-computer]
+    idempotency: reversal_je_id
+    severity: warn
+
+  # ---------------------------------------------------------------------------
+  # CHARGEBACK (Phase 4)
+  # ---------------------------------------------------------------------------
+  - type: chargeback.case.notified
+    source: chargeback
+    version: 1
+    description: New dispute notification ingested.
+    payload: ChargebackNotifiedEvent
+    consumers: [alert-router, dashboard-builder]
+    idempotency: source + external_case_id
+    severity: warn
+
+  - type: chargeback.evidence.collected
+    source: chargeback
+    version: 1
+    description: Evidence packet assembled.
+    consumers: [dashboard-builder]
+    idempotency: case_id + collection_run_id
+    severity: info
+
+  - type: chargeback.case.submitted
+    source: chargeback
+    version: 1
+    description: Evidence submitted to source (Stripe, OTA).
+    consumers: [audit-log-reader]
+    idempotency: case_id + submitted_at
+    severity: info
+
+  - type: chargeback.case.decided
+    source: chargeback
+    version: 1
+    description: Dispute outcome received.
+    payload: ChargebackDecidedEvent
+    consumers: [kpi-computer, dashboard-builder, revpost]
+    idempotency: case_id + decided_at
+    severity: info
+
+  - type: chargeback.reserve.recomputed
+    source: chargeback
+    version: 1
+    description: Monthly reserve calc complete.
+    consumers: [revpost, kpi-computer, dashboard-builder]
+    idempotency: reserve_id
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # UTILITY (Phase 5)
+  # ---------------------------------------------------------------------------
+  - type: utility.bill.ingested
+    source: utility
+    version: 1
+    description: New utility bill picked up from email/upload.
+    payload: UtilityBillIngestedEvent
+    consumers: [audit-log-reader, dashboard-builder]
+    idempotency: bill.idempotency_key
+    severity: info
+
+  - type: utility.bill.parsed
+    source: utility
+    version: 1
+    description: Bill structured extraction complete.
+    consumers: []
+    idempotency: bill_id + parsed_at
+    severity: info
+
+  - type: utility.bill.matched
+    source: utility
+    version: 1
+    description: Bill matched to property/owner.
+    consumers: [dashboard-builder]
+    idempotency: bill_id + matched_at
+    severity: info
+
+  - type: utility.bill.variance_flagged
+    source: utility
+    version: 1
+    description: Bill amount diverged from historical baseline.
+    consumers: [alert-router]
+    idempotency: flag_id
+    severity: warn
+
+  - type: utility.owner.notification_sent
+    source: utility
+    version: 1
+    description: "Building-trust" owner was notified and awaits response.
+    consumers: [dashboard-builder]
+    idempotency: bill_id + notified_at
+    severity: info
+
+  - type: utility.credit.applied
+    source: utility
+    version: 1
+    description: Credit applied to owner statement; JE produced.
+    payload: UtilityCreditAppliedEvent
+    consumers: [revpost, kpi-computer, audit-log-reader]
+    idempotency: application_id
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # CLOSE CYCLE
+  # ---------------------------------------------------------------------------
+  - type: close.cycle.started
+    source: center
+    version: 1
+    description: Month-end close kicked off.
+    consumers: [dashboard-builder, alert-router]
+    idempotency: cycle_id
+    severity: info
+
+  - type: close.step.completed
+    source: center
+    version: 1
+    description: A close step finished (success/failure).
+    payload: CloseStepCompletedEvent
+    consumers: [dashboard-builder, audit-log-reader]
+    idempotency: step_id
+    severity: info
+
+  - type: close.gate.failed
+    source: center
+    version: 1
+    description: A hard gate (e.g. trial balance) failed.
+    consumers: [alert-router]
+    idempotency: step_id + failed_at
+    severity: critical
+
+  - type: close.cycle.completed
+    source: center
+    version: 1
+    description: Close cycle completed and approved.
+    consumers: [cross-product-reporter, dashboard-builder, audit-log-reader]
+    idempotency: cycle_id + completed_at
+    severity: info
+
+  # ---------------------------------------------------------------------------
+  # REPORTS
+  # ---------------------------------------------------------------------------
+  - type: report.generated
+    source: center
+    version: 1
+    description: A scheduled or on-demand report was generated.
+    consumers: [dashboard-builder]
+    idempotency: report_id
+    severity: info
+
+  - type: report.delivered
+    source: center
+    version: 1
+    description: Report dispatched to recipients.
+    consumers: [audit-log-reader]
+    idempotency: distribution_id
+    severity: info

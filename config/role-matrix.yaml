@@ -1,0 +1,100 @@
+# =============================================================================
+# Role Matrix — Accounting Center
+# =============================================================================
+# Maps logical roles to people, contact channels, escalation chains, and
+# quiet hours. Seeded into role_matrix table on migrate.
+#
+# Phase 1 is intentionally small (COO + Controller). As we hire, add roles
+# rather than hard-coding individuals elsewhere.
+# =============================================================================
+
+version: 1
+
+roles:
+
+  - role_id: coo
+    display_name: Chief Operating Officer
+    email: jason@acmehousecompany.com
+    slack_user_id: U_COO_PLACEHOLDER
+    sms_number: "+1-555-000-0001"
+    escalates_to: ceo
+    escalation_minutes: 30
+    quiet_hours_start: "21:00"
+    quiet_hours_end: "06:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: true
+    enabled: true
+
+  - role_id: ceo
+    display_name: Chief Executive Officer
+    email: mike@acmehousecompany.com
+    slack_user_id: U_CEO_PLACEHOLDER
+    sms_number: "+1-555-000-0002"
+    escalates_to: null
+    escalation_minutes: 60
+    quiet_hours_start: "22:00"
+    quiet_hours_end: "07:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: true
+    enabled: true
+
+  - role_id: accounting-controller
+    display_name: Accounting Controller
+    email: controller@acmehousecompany.com
+    slack_user_id: U_CTRL_PLACEHOLDER
+    sms_number: null
+    escalates_to: coo
+    escalation_minutes: 15
+    quiet_hours_start: "19:00"
+    quiet_hours_end: "07:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: true
+    enabled: true
+
+  - role_id: ap-specialist
+    display_name: AP Specialist
+    email: ap@acmehousecompany.com
+    slack_user_id: U_AP_PLACEHOLDER
+    escalates_to: accounting-controller
+    escalation_minutes: 15
+    quiet_hours_start: "18:00"
+    quiet_hours_end: "08:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: false
+    enabled: true
+
+  - role_id: owner-success-lead
+    display_name: Owner Success Lead
+    email: owner-success@acmehousecompany.com
+    slack_user_id: U_OS_PLACEHOLDER
+    escalates_to: coo
+    escalation_minutes: 20
+    quiet_hours_start: "19:00"
+    quiet_hours_end: "08:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: false
+    enabled: true
+
+  - role_id: support-director
+    display_name: Director of Support
+    email: jocelyn@acmehousecompany.com
+    slack_user_id: U_SUP_PLACEHOLDER
+    escalates_to: coo
+    escalation_minutes: 20
+    quiet_hours_start: "20:00"
+    quiet_hours_end: "07:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: true
+    enabled: true
+
+  - role_id: vp-ops
+    display_name: VP Operations
+    email: larissa@acmehousecompany.com
+    slack_user_id: U_VP_PLACEHOLDER
+    escalates_to: coo
+    escalation_minutes: 20
+    quiet_hours_start: "20:00"
+    quiet_hours_end: "07:00"
+    local_tz: America/Los_Angeles
+    accepts_critical_during_quiet: true
+    enabled: true

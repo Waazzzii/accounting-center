@@ -1,0 +1,228 @@
+# =============================================================================
+# Orchestrator Routing Rules — Accounting Center
+# =============================================================================
+# Declarative event → agent dispatch. Evaluated in priority order (lower first).
+# The first matching rule wins unless `continue_on_match: true`.
+# =============================================================================
+
+version: 1
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # TrustSync fan-out
+  # ---------------------------------------------------------------------------
+  - rule_id: trust-breach-to-alert
+    description: Every trust breach raises a critical alert immediately.
+    priority: 10
+    match_event_type: trustsync.breach.detected
+    target_product: center
+    target_agent: alert-router
+    required_approvals: 0
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: trust-transfer-proposed-to-approval
+    description: Every proposed transfer queues an approval.
+    priority: 20
+    match_event_type: trustsync.transfer.proposed
+    target_product: center
+    target_agent: approval-queue
+    required_approvals: 1
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: trust-settled-to-revpost
+    description: Settled transfers trigger the JE producer in RevPost.
+    priority: 30
+    match_event_type: trustsync.transfer.settled
+    target_product: revpost
+    target_agent: trust-transfer-je-producer
+    timeout_seconds: 120
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # OTAAuditor fan-out
+  # ---------------------------------------------------------------------------
+  - rule_id: ota-ingested-to-parser
+    priority: 40
+    match_event_type: otaauditor.payout.ingested
+    target_product: otaauditor
+    target_agent: payout-parser
+    timeout_seconds: 300
+    enabled: true
+
+  - rule_id: ota-parsed-to-matcher
+    priority: 41
+    match_event_type: otaauditor.payout.parsed
+    target_product: otaauditor
+    target_agent: reservation-matcher
+    timeout_seconds: 300
+    enabled: true
+
+  - rule_id: ota-matched-to-variance
+    priority: 42
+    match_event_type: otaauditor.payout.matched
+    target_product: otaauditor
+    target_agent: variance-analyzer
+    timeout_seconds: 180
+    enabled: true
+
+  - rule_id: ota-variance-to-alert
+    priority: 43
+    match_event_type: otaauditor.variance.flagged
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: ota-packet-to-revpost
+    priority: 50
+    match_event_type: otaauditor.reconciliation.finalized
+    target_product: revpost
+    target_agent: ota-packet-je-producer
+    timeout_seconds: 300
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # RevPost fan-out
+  # ---------------------------------------------------------------------------
+  - rule_id: revpost-draft-to-approval
+    priority: 60
+    match_event_type: revpost.je.drafted
+    target_product: center
+    target_agent: approval-queue
+    required_approvals: 1
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: revpost-approved-to-poster
+    priority: 61
+    match_event_type: revpost.je.approved
+    target_product: revpost
+    target_agent: intacct-poster
+    timeout_seconds: 300
+    max_retries: 5
+    enabled: true
+
+  - rule_id: revpost-failed-to-alert
+    priority: 62
+    match_event_type: revpost.je.failed
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: revpost-posted-to-kpi
+    priority: 63
+    match_event_type: revpost.je.posted
+    target_product: center
+    target_agent: kpi-computer
+    timeout_seconds: 60
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # Chargeback fan-out
+  # ---------------------------------------------------------------------------
+  - rule_id: chargeback-notified-to-evidence
+    priority: 70
+    match_event_type: chargeback.case.notified
+    target_product: chargeback
+    target_agent: evidence-collector
+    timeout_seconds: 900
+    enabled: true
+
+  - rule_id: chargeback-notified-to-alert
+    priority: 71
+    match_event_type: chargeback.case.notified
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    continue_on_match: true
+    enabled: true
+
+  - rule_id: chargeback-decided-to-revpost
+    priority: 72
+    match_event_type: chargeback.case.decided
+    target_product: revpost
+    target_agent: chargeback-outcome-je-producer
+    timeout_seconds: 180
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # Utility fan-out
+  # ---------------------------------------------------------------------------
+  - rule_id: utility-ingested-to-parser
+    priority: 80
+    match_event_type: utility.bill.ingested
+    target_product: utility
+    target_agent: bill-parser
+    timeout_seconds: 300
+    enabled: true
+
+  - rule_id: utility-parsed-to-matcher
+    priority: 81
+    match_event_type: utility.bill.parsed
+    target_product: utility
+    target_agent: property-owner-matcher
+    timeout_seconds: 180
+    enabled: true
+
+  - rule_id: utility-matched-to-classifier
+    priority: 82
+    match_event_type: utility.bill.matched
+    target_product: utility
+    target_agent: owner-mode-classifier
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: utility-variance-to-alert
+    priority: 83
+    match_event_type: utility.bill.variance_flagged
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: utility-credit-to-revpost
+    priority: 84
+    match_event_type: utility.credit.applied
+    target_product: revpost
+    target_agent: utility-credit-je-producer
+    timeout_seconds: 180
+    enabled: true
+
+  # ---------------------------------------------------------------------------
+  # Center cross-cutting
+  # ---------------------------------------------------------------------------
+  - rule_id: any-approval-requested-to-router
+    priority: 100
+    match_event_type: center.approval.requested
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: health-change-to-router
+    priority: 110
+    match_event_type: health.state.changed
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: kpi-snapshot-to-dashboard
+    priority: 120
+    match_event_type: kpi.snapshot.written
+    target_product: center
+    target_agent: dashboard-builder
+    timeout_seconds: 60
+    enabled: true
+
+  - rule_id: close-gate-failed-to-critical-alert
+    priority: 5           # HIGHEST PRIORITY — never let this one slip
+    match_event_type: close.gate.failed
+    target_product: center
+    target_agent: alert-router
+    timeout_seconds: 60
+    enabled: true
