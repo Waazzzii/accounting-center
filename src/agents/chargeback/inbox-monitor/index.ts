@@ -257,6 +257,7 @@ class InboxMonitor extends AgentBase {
         {
           source: parsed.processor,
           external_case_id: parsed.external_case_id,
+          notified_at: new Date().toISOString(),
           amount: parsed.amount,
           currency: parsed.currency,
           reason_code: parsed.reason_code,
@@ -264,12 +265,12 @@ class InboxMonitor extends AgentBase {
           charge_date: parsed.charge_date,
           processor_deadline: parsed.processor_deadline,
           internal_deadline: internalDeadline.toISOString().slice(0, 10),
-          status: "new",
+          // stage defaults to 'notified' at the schema level
           inbox_message_id: msg.message_id,
         },
         { onConflict: "source,external_case_id", ignoreDuplicates: false },
       )
-      .select("id, source, external_case_id, amount, status")
+      .select("case_id, source, external_case_id, amount, stage")
       .single();
 
     if (error) {
@@ -277,7 +278,7 @@ class InboxMonitor extends AgentBase {
       return;
     }
 
-    const caseId = upserted.id as string;
+    const caseId = upserted.case_id as string;
 
     await this.audit({
       action: "case.created",
@@ -322,7 +323,7 @@ class InboxMonitor extends AgentBase {
     const sb = serviceClient();
     const { data: existing } = await sb
       .from("chargeback_cases")
-      .select("id, status")
+      .select("case_id, stage")
       .eq("source", parsed.processor)
       .eq("external_case_id", parsed.external_case_id)
       .single();
@@ -332,20 +333,20 @@ class InboxMonitor extends AgentBase {
       return;
     }
 
-    const caseId = existing.id as string;
+    const caseId = existing.case_id as string;
 
     await sb
       .from("chargeback_cases")
-      .update({ status: parsed.decision, decided_at: new Date().toISOString() })
-      .eq("id", caseId);
+      .update({ stage: parsed.decision, decided_at: new Date().toISOString() })
+      .eq("case_id", caseId);
 
     await this.audit({
       action: "case.decided",
       entity_type: "chargeback_case",
       entity_id: caseId,
       correlation_id: correlationId,
-      before_state: { status: existing.status },
-      after_state: { status: parsed.decision },
+      before_state: { stage: existing.stage },
+      after_state: { stage: parsed.decision },
       reason: `Outcome from ${parsed.processor}: ${parsed.decision}`,
     });
 

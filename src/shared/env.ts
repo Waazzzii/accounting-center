@@ -29,6 +29,7 @@ const EnvSchema = z.object({
   COLUMN_BANK_API_KEY: z.string().optional(),
   COLUMN_BANK_API_URL: z.string().url().optional(),
   STREAMLINE_API_KEY: z.string().optional(),
+  STREAMLINE_API_SECRET: z.string().optional(),
   STREAMLINE_API_URL: z.string().url().optional(),
   INTACCT_API_USER: z.string().optional(),
   INTACCT_API_PASSWORD: z.string().optional(),

@@ -425,7 +425,7 @@ class ReservationMatcher extends AgentBase {
         match_confidence: confidence,
         matched_at: new Date().toISOString(),
       })
-      .eq("id", caseId);
+      .eq("case_id", caseId);
 
     if (error) {
       this.log.error({ error, caseId, reservationId }, "failed to update case with match");

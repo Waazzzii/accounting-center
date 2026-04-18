@@ -48,13 +48,17 @@ async function main() {
   const sb = serviceClient();
 
   // ---- 0. Import + start the agents we want to observe reacting -----------
+  // Paths computed as variables so TS doesn't flag the .ts extension in a
+  // static import literal (runtime under tsx handles it fine).
   log.info("starting case-tracker + reservation-matcher...");
-  const trackerMod = (await import(
-    "../src/agents/chargeback/case-tracker/index.ts"
-  )) as { default: { start: () => Promise<void>; stop: () => Promise<void> } };
-  const matcherMod = (await import(
-    "../src/agents/chargeback/reservation-matcher/index.ts"
-  )) as { default: { start: () => Promise<void>; stop: () => Promise<void> } };
+  const trackerPath = "../src/agents/chargeback/case-tracker/index.ts";
+  const matcherPath = "../src/agents/chargeback/reservation-matcher/index.ts";
+  const trackerMod = (await import(trackerPath)) as {
+    default: { start: () => Promise<void>; stop: () => Promise<void> };
+  };
+  const matcherMod = (await import(matcherPath)) as {
+    default: { start: () => Promise<void>; stop: () => Promise<void> };
+  };
 
   const tracker = trackerMod.default;
   const matcher = matcherMod.default;
