@@ -121,7 +121,7 @@ events:
   # ---------------------------------------------------------------------------
   # ALERTS
   # ---------------------------------------------------------------------------
-  - type: alert.raised
+  - type: center.alert.raised
     source: center
     version: 1
     description: A new alert is being routed (fingerprinted; may dedup).
@@ -130,7 +130,7 @@ events:
     idempotency: fingerprint + window
     severity: variable
 
-  - type: alert.delivered
+  - type: center.alert.delivered
     source: center
     version: 1
     description: Alert dispatched to channels. Tracks outbound.
@@ -138,7 +138,7 @@ events:
     idempotency: alert_id
     severity: info
 
-  - type: alert.acked
+  - type: center.alert.acked
     source: center
     version: 1
     description: A human ack'd an alert.
@@ -391,7 +391,7 @@ events:
   - type: utility.owner.notification_sent
     source: utility
     version: 1
-    description: "Building-trust" owner was notified and awaits response.
+    description: Building-trust owner was notified and awaits response.
     consumers: [dashboard-builder]
     idempotency: bill_id + notified_at
     severity: info
@@ -444,7 +444,7 @@ events:
   # ---------------------------------------------------------------------------
   # REPORTS
   # ---------------------------------------------------------------------------
-  - type: report.generated
+  - type: center.report.generated
     source: center
     version: 1
     description: A scheduled or on-demand report was generated.
@@ -452,7 +452,7 @@ events:
     idempotency: report_id
     severity: info
 
-  - type: report.delivered
+  - type: center.report.delivered
     source: center
     version: 1
     description: Report dispatched to recipients.

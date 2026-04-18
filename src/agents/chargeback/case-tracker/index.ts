@@ -52,18 +52,6 @@ type CaseStage =
   | "accepted"
   | "reversed";
 
-interface CaseRecord {
-  case_id: string;
-  external_case_id: string;
-  source: string;
-  stage: CaseStage;
-  amount: number;
-  currency: string;
-  guest_name: string;
-  evidence_due_at: string | null;
-  updated_at: string;
-}
-
 interface StateTransition {
   case_id: string;
   from_stage: CaseStage | null;
@@ -96,14 +84,7 @@ const TERMINAL_STAGES = new Set<CaseStage>(["won", "lost", "accepted", "reversed
 // SLA configuration
 // ---------------------------------------------------------------------------
 
-/** Stage-level SLA in business hours. Used for stall detection. */
-const STAGE_SLA_HOURS: Partial<Record<CaseStage, number>> = {
-  notified: 6,
-  under_review: 48,
-  evidence_collecting: 120,
-  evidence_submitted: 8,
-  awaiting_decision: 24,
-};
+// Stage-level SLA config lives in config/thresholds.yaml — read at runtime, not hardcoded.
 
 // ---------------------------------------------------------------------------
 // Agent

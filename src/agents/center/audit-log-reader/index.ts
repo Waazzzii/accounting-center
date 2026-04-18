@@ -10,7 +10,6 @@ import {
   type AgentIdentity,
   serviceClient,
 } from "@shared/index.js";
-import { sha256Hex } from "@shared/hash.js";
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -246,6 +245,7 @@ class AuditLogReader extends AgentBase {
     // Walk the chain in ascending order, batching to avoid memory pressure.
     const BATCH = 1_000;
     let lastId: string | null = null;
+    let lastBatchHash: string | null = null;
 
     outer:
     while (true) {
@@ -282,7 +282,7 @@ class AuditLogReader extends AgentBase {
         }
       }
 
-      var lastBatchHash = rows[rows.length - 1].row_hash;
+      lastBatchHash = rows[rows.length - 1].row_hash;
       lastId = rows[rows.length - 1].id;
 
       // If we got fewer than BATCH rows, we've reached the end.
@@ -306,7 +306,7 @@ class AuditLogReader extends AgentBase {
         "AUDIT CHAIN BROKEN — integrity violation detected",
       );
       await this.emit(
-        "alert.raised",
+        "center.alert.raised",
         {
           category: "audit_chain",
           severity: "critical",

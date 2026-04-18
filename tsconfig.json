@@ -21,7 +21,6 @@
     "resolveJsonModule": true,
     "allowJs": false,
     "outDir": "./dist",
-    "rootDir": "./src",
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["src/shared/*"],

@@ -3,7 +3,7 @@
  * suppressions, resolves routing policies + on-call overrides, respects
  * quiet hours, dispatches delivery records, and manages escalation timers.
  *
- * Phase 1 dispatch = emit `alert.delivered` event. Actual Slack/email/SMS
+ * Phase 1 dispatch = emit `center.alert.delivered` event. Actual Slack/email/SMS
  * integration arrives later via MCP tools.
  */
 
@@ -82,7 +82,7 @@ const SEVERITY_ORDER: Record<Severity, number> = {
 };
 
 const SUBSCRIBED_EVENTS = [
-  "alert.raised",
+  "center.alert.raised",
   "health.state.changed",
   "trustsync.breach.detected",
   "center.approval.requested",
@@ -131,7 +131,7 @@ class AlertRouter extends AgentBase {
 
     // Subscribe to ack events to clear escalation timers.
     const unsub3 = this.on(
-      { event_type: "alert.acked" },
+      { event_type: "center.alert.acked" },
       (ev) => {
         const payload = (ev.payload ?? {}) as Record<string, unknown>;
         const deliveryId = payload.delivery_id as string | undefined;
@@ -246,7 +246,7 @@ class AlertRouter extends AgentBase {
 
     const primaryRole = policy?.primary_role ?? "coo";
     const ccRoles = policy?.cc_roles ?? [];
-    const ackRequired = policy?.ack_required ?? severity === "critical" || severity === "error";
+    const ackRequired = policy?.ack_required ?? (severity === "critical" || severity === "error");
     const escalationMinutes = policy?.escalation_minutes ?? cfg.escalation.level_1_minutes;
 
     // 2e. On-call override.
@@ -288,7 +288,7 @@ class AlertRouter extends AgentBase {
     if (!held) {
       // Phase 1 dispatch: emit event (Slack/email integration comes later).
       await this.emit(
-        "alert.delivered",
+        "center.alert.delivered",
         {
           delivery_id: deliveryId,
           fingerprint,
@@ -483,7 +483,7 @@ class AlertRouter extends AgentBase {
 
     // Emit escalated alert.
     await this.emit(
-      "alert.delivered",
+      "center.alert.delivered",
       {
         delivery_id: deliveryId,
         fingerprint: ctx.fingerprint,

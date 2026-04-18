@@ -8,7 +8,7 @@
  *
  * Emits:
  *   chargeback.postmortem.complete  |  chargeback.learning.signal
- *   chargeback.reserve.recomputed   |  report.generated
+ *   chargeback.reserve.recomputed   |  center.report.generated
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -66,7 +66,7 @@ class OutcomeAnalyst extends AgentBase {
 
   private async handleCaseDecided(ev: { event_id: string; correlation_id: string | null; payload: unknown }): Promise<void> {
     const cid = ev.correlation_id ?? ev.event_id;
-    const { case_id: caseId, decision, decided_at } = ev.payload as { case_id: string; decision: string; decided_at?: string };
+    const { case_id: caseId, decision } = ev.payload as { case_id: string; decision: string; decided_at?: string };
     this.log.info({ cid, caseId, decision }, "running postmortem");
     const sb = serviceClient();
 
@@ -195,7 +195,7 @@ class OutcomeAnalyst extends AgentBase {
 
     await sb.from("reports_generated").insert({ report_type: "chargeback_monthly", period, metrics, narrative, generated_by: this.identity.slug, generated_at: new Date().toISOString() });
     await this.emit("chargeback.reserve.recomputed", { period, trailing_90d_loss_rate: lossRate, trailing_90d_loss_total: lossTotal }, { correlation_id: cid });
-    await this.emit("report.generated", { report_type: "chargeback_monthly", period, metrics_summary: { win_rate: metrics.win_rate, dollars_defended: dollarsDefended, dollars_lost: dollarsLost, total_decided: decided.length } }, { correlation_id: cid });
+    await this.emit("center.report.generated", { report_type: "chargeback_monthly", period, metrics_summary: { win_rate: metrics.win_rate, dollars_defended: dollarsDefended, dollars_lost: dollarsLost, total_decided: decided.length } }, { correlation_id: cid });
     this.log.info({ period, winRate: metrics.win_rate, decided: decided.length }, "monthly report generated");
   }
 
@@ -238,7 +238,7 @@ class OutcomeAnalyst extends AgentBase {
     );
 
     await sb.from("reports_generated").insert({ report_type: "chargeback_quarterly", period: `${year}-${quarter}`, metrics: { trends: Object.fromEntries(qb), hotspots, totalLosses, benchmarkNote: bench }, narrative, generated_by: this.identity.slug, generated_at: new Date().toISOString() });
-    await this.emit("report.generated", { report_type: "chargeback_quarterly", period: `${year}-${quarter}`, metrics_summary: { total_cases: cases.length, total_losses: totalLosses, benchmark: bench } }, { correlation_id: cid });
+    await this.emit("center.report.generated", { report_type: "chargeback_quarterly", period: `${year}-${quarter}`, metrics_summary: { total_cases: cases.length, total_losses: totalLosses, benchmark: bench } }, { correlation_id: cid });
     this.log.info({ quarter: `${year}-${quarter}`, cases: cases.length }, "quarterly review generated");
   }
 

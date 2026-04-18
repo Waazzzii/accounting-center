@@ -8,7 +8,9 @@
 import { config } from "dotenv";
 import { z } from "zod";
 
-config();
+// override: true — ensures local .env values beat stale/empty shell vars.
+// In production we never ship a .env file, so real process.env always wins.
+config({ override: true });
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
