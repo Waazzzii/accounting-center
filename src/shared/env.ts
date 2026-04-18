@@ -42,8 +42,14 @@ const EnvSchema = z.object({
   DASHBOARD_PORT: z.coerce.number().int().positive().default(3100),
   ORCHESTRATOR_TICK_SECONDS: z.coerce.number().int().positive().default(60),
 
-  // Safety rails — every agent checks these
-  KILL_SWITCH_GLOBAL: z.coerce.boolean().default(false),
+  // Safety rails — every agent checks these.
+  // NOTE: z.coerce.boolean() treats the string "false" as TRUTHY (any non-empty
+  // string coerces to true). Use explicit string matching so KILL_SWITCH_GLOBAL=false
+  // actually disables the kill switch.
+  KILL_SWITCH_GLOBAL: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
   MATURITY_DEFAULT: z.enum(["shadow", "assist", "accelerated"]).default("shadow"),
 });
 
