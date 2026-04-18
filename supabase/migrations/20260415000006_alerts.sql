@@ -146,8 +146,9 @@ CREATE TABLE alert_suppressions (
   CONSTRAINT supp_time_order CHECK (expires_at > starts_at)
 );
 
-CREATE INDEX supp_active_idx ON alert_suppressions (starts_at, expires_at)
-  WHERE expires_at > NOW();
+-- Full index on (starts_at, expires_at); runtime filters on expires_at > NOW().
+-- Partial predicates using NOW() are rejected because NOW() is STABLE.
+CREATE INDEX supp_active_idx ON alert_suppressions (starts_at, expires_at);
 
 COMMENT ON TABLE alert_suppressions IS
   'Time-bounded alert suppressions. max_severity caps suppression: critical always breaks through.';

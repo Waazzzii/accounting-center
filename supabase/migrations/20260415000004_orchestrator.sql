@@ -86,8 +86,10 @@ CREATE TABLE orchestrator_flags (
 );
 
 CREATE INDEX orch_flags_product_idx ON orchestrator_flags (product, agent);
-CREATE INDEX orch_flags_active_idx  ON orchestrator_flags (flag_type)
-  WHERE expires_at IS NULL OR expires_at > NOW();
+-- Composite (flag_type, expires_at) supports both the "permanent flag" lookup
+-- (expires_at IS NULL) and range scans for not-yet-expired flags. Partial
+-- predicates using NOW() are rejected because NOW() is STABLE, not IMMUTABLE.
+CREATE INDEX orch_flags_active_idx  ON orchestrator_flags (flag_type, expires_at);
 
 CREATE TRIGGER orch_flags_updated BEFORE UPDATE ON orchestrator_flags
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();

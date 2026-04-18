@@ -133,6 +133,7 @@ COMMENT ON TABLE utility_bills IS
 -- -----------------------------------------------------------------------------
 
 CREATE TABLE utility_owner_preferences (
+  pref_id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   owner_id            TEXT NOT NULL,
   property_id         TEXT,                        -- NULL = applies to all owner's properties
   utility_kind        utility_kind,                -- NULL = applies to all kinds
@@ -142,9 +143,14 @@ CREATE TABLE utility_owner_preferences (
   notify_sms          TEXT,
   consecutive_auto_count INT NOT NULL DEFAULT 0,
   last_auto_at        TIMESTAMPTZ,
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (owner_id, COALESCE(property_id, ''), COALESCE(utility_kind::TEXT, ''))
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Enforce uniqueness per (owner, property?, utility_kind?). NULL = "applies to all".
+-- NULLS NOT DISTINCT (PG15+) treats multiple NULLs as equal, giving us the
+-- "at most one wildcard row per owner" semantic without non-IMMUTABLE COALESCE.
+CREATE UNIQUE INDEX utility_owner_prefs_scope_uk
+  ON utility_owner_preferences (owner_id, property_id, utility_kind)
+  NULLS NOT DISTINCT;
 
 CREATE TRIGGER utility_owner_prefs_updated BEFORE UPDATE ON utility_owner_preferences
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
