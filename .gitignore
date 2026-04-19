@@ -9,6 +9,17 @@ secrets/
 supabase/.branches
 supabase/.temp
 
+# Real customer data — NEVER commit
+# Streamline pulls contain guest names, emails, phones, payment amounts.
+fixtures/streamline/
+fixtures/gmail-prod/
+fixtures/ramp/
+fixtures/sage/
+# Chargeback fixtures — only the Toledo test case is committed (already known
+# internally); any other files here are presumed to contain PII.
+fixtures/chargeback-inbox/*
+!fixtures/chargeback-inbox/toledo-144522240.json
+
 # Dependencies
 node_modules/
 .pnpm-store/

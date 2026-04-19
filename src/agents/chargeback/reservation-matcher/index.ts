@@ -42,13 +42,15 @@ const IDENTITY: AgentIdentity = {
 
 const SCORE_NAME_EXACT       = 40;
 const SCORE_NAME_FUZZY       = 25;
-const SCORE_DATE_IN_STAY     = 30;
+const SCORE_DATE_IN_STAY     = 30;    // charge during stay (refund disputes, service-not-rendered)
+const SCORE_DATE_AT_BOOKING  = 25;    // charge near booking creation (original transaction disputes)
 const SCORE_AMOUNT_CLOSE     = 20;
 const SCORE_CHANNEL_MATCH    = 10;
 
 const THRESHOLD_AUTO         = 95;
 const THRESHOLD_PROBABLE     = 75;
 const AMOUNT_TOLERANCE       = 0.10; // 10 %
+const BOOKING_DATE_WINDOW_DAYS = 3;  // charge_date within ±N days of booking_created_at
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -75,6 +77,7 @@ interface ReservationCandidate {
   total_amount: number;
   channel: string | null;
   property_id: string | null;
+  booking_created_at?: string | null;
 }
 
 interface ScoredCandidate extends ReservationCandidate {
@@ -86,11 +89,14 @@ interface ScoredCandidate extends ReservationCandidate {
 // Channel mapping — maps processor to expected booking channel
 // ---------------------------------------------------------------------------
 
+// Lynnbrook is a VACATION-RENTAL payment processor — the underlying booking
+// can be VRBO, HomeAway, or direct. Airbnb does NOT use Lynnbrook. So we
+// give Lynnbrook credit for any of those channels.
 const PROCESSOR_CHANNEL_MAP: Record<string, string[]> = {
   airbnb_resolutions: ["airbnb"],
   vrbo:               ["vrbo", "homeaway", "expedia"],
   stripe:             ["direct", "website"],
-  lynnbrook:          ["direct", "website"],
+  lynnbrook:          ["vrbo", "homeaway", "direct", "website"],
 };
 
 // ---------------------------------------------------------------------------
@@ -221,18 +227,31 @@ class ReservationMatcher extends AgentBase {
     const sb = serviceClient();
     const chargeDate = caseData.charge_date;
 
-    // Search window: 60 days before and 14 days after the charge date
-    const searchStart = new Date(chargeDate);
-    searchStart.setDate(searchStart.getDate() - 60);
-    const searchEnd = new Date(chargeDate);
-    searchEnd.setDate(searchEnd.getDate() + 14);
+    // Two overlapping windows — any reservation matching EITHER is a candidate:
+    //   (a) check_in ∈ [charge_date − 60d, charge_date + 180d]
+    //       Captures refund / service-not-rendered disputes where the stay
+    //       is near the charge date. Forward window is wide because VRBO
+    //       bookings are often made months in advance.
+    //   (b) booking_created_at ∈ [charge_date − 14d, charge_date + 7d]
+    //       Captures original-transaction disputes where the charge date
+    //       is the booking timestamp and the stay is far in the future.
+    const stayStart = this.shiftDate(chargeDate, -60);
+    const stayEnd = this.shiftDate(chargeDate, 180);
+    const bookingStart = this.shiftDate(chargeDate, -14);
+    const bookingEnd = this.shiftDate(chargeDate, 7);
+
+    // Supabase REST: .or() takes a comma-separated filter expression.
+    // `and()` groups the two-sided range per window.
+    const orExpr = [
+      `and(check_in.gte.${stayStart},check_in.lte.${stayEnd})`,
+      `and(booking_created_at.gte.${bookingStart}T00:00:00Z,booking_created_at.lte.${bookingEnd}T23:59:59Z)`,
+    ].join(",");
 
     const { data, error } = await sb
       .from("reservations_cache")
-      .select("reservation_id, guest_name, check_in, check_out, total_amount, channel, property_id")
-      .gte("check_in", searchStart.toISOString().slice(0, 10))
-      .lte("check_in", searchEnd.toISOString().slice(0, 10))
-      .limit(200);
+      .select("reservation_id, guest_name, check_in, check_out, total_amount, channel, property_id, booking_created_at")
+      .or(orExpr)
+      .limit(500);
 
     if (error) {
       this.log.error({ error, caseId: caseData.case_id }, "reservation search failed");
@@ -247,7 +266,14 @@ class ReservationMatcher extends AgentBase {
       total_amount: row.total_amount,
       channel: row.channel,
       property_id: row.property_id,
+      booking_created_at: row.booking_created_at,
     }));
+  }
+
+  private shiftDate(iso: string, days: number): string {
+    const d = new Date(iso);
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
   }
 
   // -------------------------------------------------------------------------
@@ -265,10 +291,19 @@ class ReservationMatcher extends AgentBase {
       total += nameScore;
     }
 
-    // --- Charge date within stay dates ---
+    // --- Charge date within stay dates (refund / service-not-rendered disputes) ---
     if (this.isDateWithinStay(caseData.charge_date, candidate.check_in, candidate.check_out)) {
       breakdown["date_in_stay"] = SCORE_DATE_IN_STAY;
       total += SCORE_DATE_IN_STAY;
+    } else if (
+      candidate.booking_created_at &&
+      this.isDateNearBooking(caseData.charge_date, candidate.booking_created_at)
+    ) {
+      // --- Charge date near booking creation (original-transaction disputes) ---
+      // Covers VRBO/HomeAway chargebacks where customers dispute the initial payment,
+      // which happens at booking time — often weeks before the stay.
+      breakdown["date_at_booking"] = SCORE_DATE_AT_BOOKING;
+      total += SCORE_DATE_AT_BOOKING;
     }
 
     // --- Amount proximity ---
@@ -284,6 +319,14 @@ class ReservationMatcher extends AgentBase {
     }
 
     return { ...candidate, score: total, score_breakdown: breakdown };
+  }
+
+  private isDateNearBooking(chargeDate: string, bookingCreatedAt: string): boolean {
+    const charge = new Date(chargeDate).getTime();
+    const booking = new Date(bookingCreatedAt).getTime();
+    if (isNaN(charge) || isNaN(booking)) return false;
+    const diffDays = Math.abs(charge - booking) / 86_400_000;
+    return diffDays <= BOOKING_DATE_WINDOW_DAYS;
   }
 
   private scoreGuestName(candidateName: string, caseName: string): number {

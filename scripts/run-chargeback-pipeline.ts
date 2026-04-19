@@ -27,10 +27,6 @@ const log = rootLogger.child({ component: "run-pipeline" });
 
 const TOLEDO_REF = "144522240";
 const FIXTURE_PATH = "fixtures/chargeback-inbox/toledo-144522240.json";
-const RESERVATION_IDS = [
-  "SL-CV-2026-00417", "SL-CV-2026-00415", "SL-CV-2026-00201",
-  "SL-CV-2026-00305", "SL-PHX-2026-00512",
-];
 
 async function main() {
   const sb = serviceClient();
@@ -40,29 +36,18 @@ async function main() {
   await sb.from("chargeback_cases").delete().eq("external_case_id", TOLEDO_REF);
   await sb.from("chargeback_inbox").delete().eq("message_id", "gmail-msg-f-1862520494500497507");
 
-  // ---- 2. Reseed reservations_cache ----------------------------------------
-  log.info("reseeding reservations_cache...");
-  const seedModPath = "../scripts/seed-reservations-cache.ts";
-  // We just run the seed data inline so this script is self-contained
-  const seedPath = resolve(process.cwd(), "scripts/seed-reservations-cache.ts");
-  const seedRaw = readFileSync(seedPath, "utf8");
-  // Extract the SEEDS array via a fresh tsx import
-  const { SEEDS } = await (async () => {
-    // Eval-safe: dynamic import of the seed module, which exports SEEDS
-    const mod = (await import(seedModPath)) as { SEEDS?: unknown };
-    if (mod.SEEDS) return { SEEDS: mod.SEEDS as Array<Record<string, unknown>> };
-    // Fallback: parse the array out of the source (doesn't currently export)
-    void seedRaw;
-    throw new Error("seed-reservations-cache.ts must export SEEDS");
-  })();
-
-  await sb.from("reservations_cache").upsert(SEEDS, { onConflict: "reservation_id" });
-  // Re-select so we can verify the Toledo row has the right date window now
-  const { data: toledoResv } = await sb
+  // ---- 2. Verify reservations_cache has data -------------------------------
+  // After Wave C, reservations_cache is populated by the Streamline ingest
+  // (scripts/ingest-streamline-reservations.ts). We no longer reseed synthetic
+  // rows — we rely on real data being there.
+  const { count: cacheCount } = await sb
     .from("reservations_cache")
-    .select("reservation_id, guest_name, check_in, check_out, total_amount, channel")
-    .in("reservation_id", RESERVATION_IDS);
-  log.info({ count: toledoResv?.length }, "reservations reseeded");
+    .select("*", { count: "exact", head: true });
+  log.info({ cache_rows: cacheCount }, "reservations_cache population check");
+  if (!cacheCount || cacheCount === 0) {
+    log.fatal("reservations_cache is empty — run ingest-streamline-reservations first");
+    process.exit(1);
+  }
 
   // ---- 3. Stage the fixture into chargeback_inbox --------------------------
   log.info("staging Toledo email fixture in chargeback_inbox");

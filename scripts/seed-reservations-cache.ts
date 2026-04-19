@@ -1,13 +1,16 @@
 /**
- * seed-reservations-cache.ts — populate reservations_cache with enough data
- * to exercise the chargeback reservation-matcher end-to-end.
+ * seed-reservations-cache.ts — DEPRECATED as of Wave C (Streamline sync live).
  *
- * This is a STAND-IN for the future streamline-sync agent. It seeds 5 rows
- * calibrated to the Toledo replay so we can observe a real "probable match"
- * outcome (score ~90) without waiting on Streamline API connectivity.
+ * ⚠️  DO NOT RUN against dev or prod after 2026-04-18 ⚠️
  *
- * When the Streamline MCP / direct API comes back online, replace this
- * script with a real sync (see Wave A in the roadmap).
+ * This script was the interim seed while the Streamline MCP was down. It
+ * inserts 5 hand-crafted reservations (IDs prefixed SL-*) that shadow the
+ * real data. After Wave C, we use ingest-streamline-reservations.ts instead,
+ * which pulls real rows from Streamline via MCP.
+ *
+ * Kept in-tree as a reference for how to construct a reservations_cache row
+ * shape, and for unit-test fixture setup where a throwaway in-memory DB
+ * wants deterministic data.
  */
 import { serviceClient } from "@shared/supabase.js";
 import { rootLogger } from "@shared/logger.js";
