@@ -15,6 +15,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { env } from "@shared/env.js";
 import {
   AgentBase,
   type AgentIdentity,
@@ -109,7 +110,11 @@ interface NarrativeDraft {
 // Constants
 // ---------------------------------------------------------------------------
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+// Use the model configured in env (default claude-opus-4-5-20251101). The
+// original pin `claude-sonnet-4-20250514` was deprecated — Anthropic API
+// returns a migration error. env.ANTHROPIC_MODEL lets ops upgrade without
+// a code change.
+const CLAUDE_MODEL = env.ANTHROPIC_MODEL;
 const MAX_WORDS_STANDARD = 600;
 const MAX_WORDS_HIGH_VALUE = 900;
 const HIGH_VALUE_THRESHOLD = 5000;
@@ -249,12 +254,34 @@ class NarrativeDrafter extends AgentBase {
       ? MAX_WORDS_HIGH_VALUE
       : MAX_WORDS_STANDARD;
 
-    // 5. Call Claude API
+    // 5. Call Claude API — graceful degradation: if auth/model/rate-limit
+    // fails, emit chargeback.narrative.blocked so Audrey gets an explicit
+    // "manual draft required" signal instead of silently losing the case.
     let draft: NarrativeDraft;
     try {
       draft = await this.callClaude(userPrompt, maxWords, manifest, caseRecord);
     } catch (err) {
-      this.log.error({ err, caseId }, "Claude API call failed");
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isAuth = /401|authentication_error|invalid x-api-key/i.test(errMsg);
+      const isModel = /model|deprecated|migrate/i.test(errMsg);
+      const reasonCode = isAuth ? "api_auth" : isModel ? "api_model" : "api_error";
+      this.log.error({ err, caseId, reasonCode }, "Claude API call failed — emitting narrative.blocked");
+
+      await this.emit("chargeback.narrative.blocked", {
+        case_id: caseId,
+        dossier_key: manifest.dossier_key,
+        reason: reasonCode,
+        detail: errMsg.slice(0, 500),
+      }, { correlation_id: cid });
+
+      await this.audit({
+        action: "narrative.blocked",
+        entity_type: "chargeback_case",
+        entity_id: caseId,
+        correlation_id: cid,
+        reason: `Claude API failure (${reasonCode}) — manual drafting required: ${errMsg.slice(0, 200)}`,
+        severity: isAuth ? "error" : "warn",
+      });
       return;
     }
 

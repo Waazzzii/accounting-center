@@ -63,7 +63,7 @@ type DisputeReason =
   | "default";
 
 interface CaseRecord {
-  id: string;
+  case_id: string;
   source: string;
   external_case_id: string;
   amount: number;
@@ -74,7 +74,7 @@ interface CaseRecord {
   processor_deadline: string;
   internal_deadline: string;
   streamline_reservation_id: string | null;
-  status: string;
+  stage: string;
 }
 
 interface ReservationMatch {
@@ -587,7 +587,7 @@ class DossierBuilder extends AgentBase {
     const { data } = await sb
       .from("chargeback_documents")
       .select("id, document_type, file_url, metadata")
-      .eq("case_id", caseRecord.id)
+      .eq("case_id", caseRecord.case_id)
       .eq("document_type", "payment_record")
       .limit(1);
 
@@ -644,7 +644,7 @@ class DossierBuilder extends AgentBase {
     const { data: caseNotes } = await sb
       .from("chargeback_case_notes")
       .select("id, note_type, content")
-      .eq("case_id", caseRecord.id)
+      .eq("case_id", caseRecord.case_id)
       .ilike("content", "%refund%")
       .limit(5);
 
@@ -725,8 +725,8 @@ class DossierBuilder extends AgentBase {
     const sb = serviceClient();
     const { data, error } = await sb
       .from("chargeback_cases")
-      .select("id, source, external_case_id, amount, currency, reason_code, guest_name, charge_date, processor_deadline, internal_deadline, streamline_reservation_id, status")
-      .eq("id", caseId)
+      .select("case_id, source, external_case_id, amount, currency, reason_code, guest_name, charge_date, processor_deadline, internal_deadline, streamline_reservation_id, stage")
+      .eq("case_id", caseId)
       .single();
 
     if (error || !data) {
@@ -815,7 +815,7 @@ class DossierBuilder extends AgentBase {
     const sb = serviceClient();
 
     const { error } = await sb.from("chargeback_human_tasks").insert({
-      case_id: caseRecord.id,
+      case_id: caseRecord.case_id,
       external_case_id: caseRecord.external_case_id,
       title,
       description,

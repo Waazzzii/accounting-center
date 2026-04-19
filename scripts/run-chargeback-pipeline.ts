@@ -84,17 +84,30 @@ async function main() {
     process.exit(1);
   }
 
-  // ---- 4. Start the three agents in-process --------------------------------
-  log.info("starting inbox-monitor + reservation-matcher + case-tracker");
+  // ---- 4. Start the five agents in-process ---------------------------------
+  // Full chargeback pipeline: intake → match → track → dossier → narrative.
+  // Narrative-drafter will fail gracefully if ANTHROPIC_API_KEY isn't set —
+  // dossier.ready still gets emitted either way.
+  log.info("starting inbox-monitor + reservation-matcher + case-tracker + dossier-builder + narrative-drafter");
   const inboxPath = "../src/agents/chargeback/inbox-monitor/index.ts";
   const matcherPath = "../src/agents/chargeback/reservation-matcher/index.ts";
   const trackerPath = "../src/agents/chargeback/case-tracker/index.ts";
+  const dossierPath = "../src/agents/chargeback/dossier-builder/index.ts";
+  const narrativePath = "../src/agents/chargeback/narrative-drafter/index.ts";
   type AgentModule = { default: { start: () => Promise<void>; stop: () => Promise<void> } };
   const inboxMod = (await import(inboxPath)) as AgentModule;
   const matcherMod = (await import(matcherPath)) as AgentModule;
   const trackerMod = (await import(trackerPath)) as AgentModule;
+  const dossierMod = (await import(dossierPath)) as AgentModule;
+  const narrativeMod = (await import(narrativePath)) as AgentModule;
 
-  await Promise.all([inboxMod.default.start(), matcherMod.default.start(), trackerMod.default.start()]);
+  await Promise.all([
+    inboxMod.default.start(),
+    matcherMod.default.start(),
+    trackerMod.default.start(),
+    dossierMod.default.start(),
+    narrativeMod.default.start(),
+  ]);
 
   // Realtime channels need ~2-3s to finish handshake
   log.info("holding 3s for subscription handshakes...");
@@ -113,8 +126,8 @@ async function main() {
   });
 
   // ---- 6. Wait for full chain to settle -----------------------------------
-  log.info("holding 10s for inbox-monitor -> reservation-matcher -> case-tracker");
-  await new Promise((r) => setTimeout(r, 10_000));
+  log.info("holding 20s for inbox-monitor -> reservation-matcher -> case-tracker -> dossier-builder -> narrative-drafter (Claude call adds 5-10s)");
+  await new Promise((r) => setTimeout(r, 20_000));
 
   // ---- 7. Inspect results -------------------------------------------------
   const { data: finalCase } = await sb
@@ -178,7 +191,13 @@ async function main() {
   );
 
   // ---- 8. Shut down --------------------------------------------------------
-  await Promise.all([inboxMod.default.stop(), matcherMod.default.stop(), trackerMod.default.stop()]);
+  await Promise.all([
+    inboxMod.default.stop(),
+    matcherMod.default.stop(),
+    trackerMod.default.stop(),
+    dossierMod.default.stop(),
+    narrativeMod.default.stop(),
+  ]);
   log.info("pipeline complete");
   process.exit(0);
 }

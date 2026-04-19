@@ -6,8 +6,9 @@
  *   chargeback.match.auto         -> status = 'under_review'
  *   chargeback.match.probable     -> status = 'under_review', flag for human
  *   chargeback.match.ambiguous    -> status = 'under_review', flag for human
- *   chargeback.match.confirmed    -> status = 'evidence_collecting'
- *   chargeback.dossier.ready      -> status = 'evidence_submitted'
+ *   chargeback.match.confirmed    -> stage = 'evidence_collecting'
+ *   chargeback.dossier.ready      -> stage = 'evidence_collecting' (dossier assembled, review pending)
+ *   chargeback.case.submitted     -> stage = 'evidence_submitted'  (after human clicks submit)
  *   chargeback.narrative.ready    -> status = 'awaiting_decision'
  *   chargeback.case.decided       -> status = won/lost/accepted
  *
@@ -140,7 +141,10 @@ class CaseTracker extends AgentBase {
     // 6. Dossier ready — evidence submitted internally
     this.unsubscribers.push(
       this.on({ event_type: "chargeback.dossier.ready" }, async (ev) => {
-        await this.handleStageAdvance(ev, "evidence_submitted");
+        // Dossier built !== submitted. Narrative-drafter is next; then human
+        // review; then an explicit chargeback.case.submitted transitions to
+        // evidence_submitted. Advance to evidence_collecting here.
+        await this.handleStageAdvance(ev, "evidence_collecting");
       }),
     );
 
