@@ -84,25 +84,52 @@ interface InboxMessage {
 // Constants
 // ---------------------------------------------------------------------------
 
+// Body/subject text patterns. Lynnbrook emails come from aptx.cm and DON'T
+// contain the literal word "lynnbrook" — the brand is image-only. We detect
+// them via sender address OR the distinctive "Chargeback Risk" + "Reference #"
+// + "Payment Amount" structure.
 const PROCESSOR_PATTERNS: Record<Processor, RegExp> = {
   stripe:              /stripe/i,
-  lynnbrook:           /lynnbrook/i,
+  lynnbrook:           /lynnbrook|chargeback\s+risk|reference\s*#[:\s]*\d+.*payment\s+amount/is,
   airbnb_resolutions:  /airbnb.*resol|resol.*airbnb/i,
   vrbo:                /vrbo|homeaway|expedia.*group.*dispute/i,
 };
 
+// Sender-based processor hints (takes precedence over body text matching).
+const SENDER_PROCESSOR_MAP: Array<{ pattern: RegExp; processor: Processor }> = [
+  { pattern: /aptx\.cm|lynnbrookgroup\.com/i,              processor: "lynnbrook" },
+  { pattern: /notifications@stripe\.com|disputes@stripe/i, processor: "stripe" },
+  { pattern: /resolutions@airbnb|airbnb.*resolutions/i,    processor: "airbnb_resolutions" },
+  { pattern: /vrbo\.com|homeaway/i,                        processor: "vrbo" },
+];
+
 const REASON_CODE_MAP: Record<string, ReasonCode> = {
-  fraudulent:              "fraudulent",
-  fraud:                   "fraudulent",
-  "not as described":      "not_as_described",
-  "product not received":  "service_not_rendered",
-  "service not rendered":  "service_not_rendered",
-  duplicate:               "duplicate",
-  "credit not processed":  "credit_not_processed",
-  "subscription canceled": "subscription_cancelled",
-  "subscription cancelled":"subscription_cancelled",
-  unrecognized:            "unrecognized",
+  fraudulent:                        "fraudulent",
+  fraud:                             "fraudulent",
+  "not as described":                "not_as_described",
+  "product not received":            "service_not_rendered",
+  "service not rendered":            "service_not_rendered",
+  duplicate:                         "duplicate",
+  "credit not processed":            "credit_not_processed",
+  "subscription canceled":           "subscription_cancelled",
+  "subscription cancelled":          "subscription_cancelled",
+  // Lynnbrook phrasing
+  "cancelled merchandise/services":  "subscription_cancelled",
+  "cancelled merchandise":           "subscription_cancelled",
+  "canceled merchandise/services":   "subscription_cancelled",
+  unrecognized:                      "unrecognized",
 };
+
+// Lynnbrook status-line deadline inference (SOP §4.2):
+//   "Unresponded"     → 3 days
+//   "Final Notice"    → 1 day
+//   "Reminder"        → 5 days
+//   default           → 10 days
+const LYNNBROOK_STATUS_DEADLINES: Array<{ pattern: RegExp; days: number }> = [
+  { pattern: /final\s*notice/i, days: 1 },
+  { pattern: /unresponded/i,    days: 3 },
+  { pattern: /reminder/i,       days: 5 },
+];
 
 const INTERNAL_DEADLINE_BUFFER_DAYS = -2; // subtract 2 business days
 
@@ -368,20 +395,43 @@ class InboxMonitor extends AgentBase {
 
   private parseChargeback(msg: InboxMessage): ParsedChargeback | null {
     const combined = `${msg.subject} ${msg.body}`;
-    const processor = this.detectProcessor(combined);
+    const processor = this.detectProcessor(combined, msg.from);
     if (!processor) return null;
 
-    const externalId = this.extractPattern(combined, /(?:case|dispute|claim)[#:\s]*([A-Za-z0-9_-]{4,})/i);
+    // External case id — try case/dispute/claim prefix first, then "Reference #"
+    // (Lynnbrook uses the latter). At least 4 chars, digits or alphanumerics.
+    const externalId =
+      this.extractPattern(combined, /(?:case|dispute|claim)[#:\s]*([A-Za-z0-9_-]{4,})/i) ??
+      this.extractPattern(combined, /(?:reference|ref)\s*#?[:\s]+([A-Za-z0-9_-]{4,})/i);
     if (!externalId) return null;
 
-    const amountStr = this.extractPattern(combined, /\$\s?([\d,]+\.?\d{0,2})/);
+    // Amount — "Payment Amount: $3,679.00" or generic "$NNN.NN"
+    const amountStr =
+      this.extractPattern(combined, /(?:payment\s*amount|amount\s*disputed|charge\s*amount)[:\s]*\$?([\d,]+\.?\d{0,2})/i) ??
+      this.extractPattern(combined, /\$\s?([\d,]+\.?\d{0,2})/);
     const amount = amountStr ? parseFloat(amountStr.replace(/,/g, "")) : 0;
 
     const currency = this.extractPattern(combined, /\b(USD|CAD|EUR|GBP)\b/i)?.toUpperCase() ?? "USD";
     const reasonCode = this.normalizeReasonCode(combined);
-    const guestName = this.extractPattern(combined, /(?:guest|cardholder|customer)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)/i) ?? "Unknown";
-    const chargeDate = this.extractDate(combined, /(?:charge|transaction)\s*date[:\s]*([\d/-]+)/i) ?? msg.received_at.slice(0, 10);
-    const deadline = this.extractDate(combined, /(?:deadline|due|respond by|evidence due)[:\s]*([\d/-]+)/i) ?? this.defaultDeadline();
+
+    // Guest name — try guest/cardholder/customer labels first, then generic "Name:" (Lynnbrook)
+    const guestName =
+      this.extractPattern(combined, /(?:guest|cardholder|customer)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+(?: [A-Z][a-z]+)?)/i) ??
+      this.extractPattern(combined, /(?:^|\n)\s*Name[:\s]+([A-Z][a-z]+ [A-Z][a-z]+(?: [A-Z][a-z]+)?)/m) ??
+      "Unknown";
+
+    // Charge date — explicit "charge date"/"transaction date" label, then
+    // Lynnbrook-style "Date: 22 Mar 2026 ...", then fallback to received_at.
+    const chargeDate =
+      this.extractDate(combined, /(?:charge|transaction)\s*date[:\s]*([^\n]+)/i) ??
+      this.extractDate(combined, /(?:^|\n)\s*Date[:\s]*([^\n]+)/m) ??
+      msg.received_at.slice(0, 10);
+
+    // Deadline — explicit label, else Lynnbrook status-line inference, else default.
+    const deadline =
+      this.extractDate(combined, /(?:deadline|due|respond by|evidence due)[:\s]*([^\n]+)/i) ??
+      this.inferDeadlineFromStatus(combined, msg.received_at, processor) ??
+      this.defaultDeadline();
 
     return {
       processor,
@@ -397,12 +447,34 @@ class InboxMonitor extends AgentBase {
     };
   }
 
+  /**
+   * Lynnbrook notices don't include an explicit deadline — status-line keyword
+   * ("Unresponded", "Final Notice", "Reminder") determines urgency per SOP §4.2.
+   */
+  private inferDeadlineFromStatus(
+    text: string,
+    receivedAt: string,
+    processor: Processor,
+  ): string | null {
+    if (processor !== "lynnbrook") return null;
+    for (const { pattern, days } of LYNNBROOK_STATUS_DEADLINES) {
+      if (pattern.test(text)) {
+        const d = new Date(receivedAt);
+        d.setDate(d.getDate() + days);
+        return d.toISOString().slice(0, 10);
+      }
+    }
+    return null;
+  }
+
   private parseOutcome(msg: InboxMessage): ParsedOutcome | null {
     const combined = `${msg.subject} ${msg.body}`;
-    const processor = this.detectProcessor(combined);
+    const processor = this.detectProcessor(combined, msg.from);
     if (!processor) return null;
 
-    const externalId = this.extractPattern(combined, /(?:case|dispute|claim)[#:\s]*([A-Za-z0-9_-]{4,})/i);
+    const externalId =
+      this.extractPattern(combined, /(?:case|dispute|claim)[#:\s]*([A-Za-z0-9_-]{4,})/i) ??
+      this.extractPattern(combined, /(?:reference|ref)\s*#?[:\s]+([A-Za-z0-9_-]{4,})/i);
     if (!externalId) return null;
 
     let decision: OutcomeDecision = "lost";
@@ -424,7 +496,13 @@ class InboxMonitor extends AgentBase {
     };
   }
 
-  private detectProcessor(text: string): Processor | null {
+  private detectProcessor(text: string, sender: string): Processor | null {
+    // Sender first — most reliable signal (Lynnbrook notices are image-only
+    // for branding; body text never mentions "lynnbrook").
+    for (const { pattern, processor } of SENDER_PROCESSOR_MAP) {
+      if (pattern.test(sender)) return processor;
+    }
+    // Fall back to text-based detection.
     for (const [proc, pattern] of Object.entries(PROCESSOR_PATTERNS) as [Processor, RegExp][]) {
       if (pattern.test(text)) return proc;
     }

@@ -35,9 +35,11 @@ type ResvRow = {
   source_system: string;
 };
 
-// Charge date from the Toledo replay: 2026-03-12 (stay window: 2026-03-11 → 2026-03-15)
-const SEEDS: ResvRow[] = [
-  // 1. THE real match — should score ~90 (name_exact 40 + date_in_stay 30 + amount 20)
+// Aligned to the REAL Lynnbrook email: "Date: 22 Mar 2026 ..." — the Toledo
+// stay (SL-CV-2026-00417) covers 2026-03-20 to 2026-03-25 so date_in_stay scores.
+export const SEEDS: ResvRow[] = [
+  // 1. THE real match — aligned to the actual Lynnbrook email (charge date 22 Mar 2026).
+  // Expected score: name_exact 40 + date_in_stay 30 + amount_close 20 + channel 10 = 100
   {
     reservation_id: "SL-CV-2026-00417",
     confirmation_code: "DIR-TOLEDO-0417",
@@ -46,10 +48,10 @@ const SEEDS: ResvRow[] = [
     property_name: "Coachella Valley ST — Palm Oasis Unit 14",
     owner_id: "OWN-CV-0042",
     guest_name: "Jason Toledo",
-    guest_email: "jtoledo@example.com",
-    guest_phone: "+13105551234",
-    check_in: "2026-03-11",
-    check_out: "2026-03-15",
+    guest_email: "jrtoledo11@icloud.com", // matches the real email
+    guest_phone: "+13124342268",           // matches the real email
+    check_in: "2026-03-20",
+    check_out: "2026-03-25",
     adults: 2,
     children: 2,
     total_amount: 3679.00,
@@ -170,7 +172,13 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((err) => {
-  log.fatal({ err: err instanceof Error ? err.message : String(err) }, "seed crashed");
-  process.exit(1);
-});
+// Only run main() when invoked directly — NOT when imported by other scripts
+// (e.g. run-chargeback-pipeline.ts imports { SEEDS } and would otherwise trigger
+// a runaway upsert + process.exit(0) mid-pipeline).
+const isDirectInvocation = process.argv[1]?.endsWith("seed-reservations-cache.ts");
+if (isDirectInvocation) {
+  main().catch((err) => {
+    log.fatal({ err: err instanceof Error ? err.message : String(err) }, "seed crashed");
+    process.exit(1);
+  });
+}
