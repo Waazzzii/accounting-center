@@ -3,38 +3,46 @@
  *
  * Phases:
  *   1. Cleanup prior state for the Toledo case (idempotent re-runs)
- *   2. Reseed reservations_cache (matching candidates exist)
- *   3. Stage the real Lynnbrook email as a chargeback_inbox row
- *   4. Start inbox-monitor + reservation-matcher + case-tracker in-process
- *   5. Publish `chargeback.inbox.poll` to kick off processing
- *   6. Wait for the realtime-driven subscribers to react
- *   7. Inspect final state: case row, event stream, audit log
+ *   2. Verify reservations_cache populated (Wave C)
+ *   3. Start all 6 chargeback agents (gmail-ingest + 5 downstream)
+ *   4. gmail-ingest's startup poll stages the fixture + emits the poll event
+ *   5. Wait for the chain to settle
+ *   6. Inspect final state: case row, event stream, audit log
  *
- * Expected result:
- *   inbox-monitor parses the Lynnbrook email → creates case →
- *   emits chargeback.case.notified → reservation-matcher scores Jason
- *   Toledo at 100 → emits chargeback.match.auto → case-tracker advances
- *   stage to under_review.
+ * Expected chain:
+ *   gmail-ingest (fixture mode) → chargeback_inbox row + chargeback.inbox.poll
+ *   → inbox-monitor → chargeback.case.notified
+ *   → reservation-matcher → chargeback.match.auto (Toledo @ 95)
+ *   → case-tracker → state.changed (notified → under_review)
+ *   → dossier-builder → chargeback.dossier.ready
+ *   → case-tracker → state.changed (under_review → evidence_collecting)
+ *   → narrative-drafter → chargeback.narrative.ready or .blocked
+ *
+ * Gmail fixture at fixtures/gmail-prod/toledo-144522240.json — edit env
+ * GMAIL_INGEST_MODE=live and populate OAuth creds to ingest real email.
  */
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { serviceClient } from "@shared/supabase.js";
-import { publish } from "@shared/bus.js";
 import { rootLogger } from "@shared/logger.js";
 
 const log = rootLogger.child({ component: "run-pipeline" });
 
 const TOLEDO_REF = "144522240";
-const FIXTURE_PATH = "fixtures/chargeback-inbox/toledo-144522240.json";
+const TOLEDO_GMAIL_MSG_ID = "gmail:1862520494500497507";
+const FIXTURE_PATH = "fixtures/gmail-prod/toledo-144522240.json";
 
 async function main() {
   const sb = serviceClient();
 
   // ---- 1. Cleanup prior state ---------------------------------------------
-  log.info("cleanup: removing prior Toledo case + inbox fixture if present");
+  log.info("cleanup: removing prior Toledo case + inbox rows if present");
   await sb.from("chargeback_cases").delete().eq("external_case_id", TOLEDO_REF);
-  await sb.from("chargeback_inbox").delete().eq("message_id", "gmail-msg-f-1862520494500497507");
+  // Clean up BOTH the old chargeback-inbox fixture id AND the gmail-ingest id
+  await sb.from("chargeback_inbox").delete().in("message_id", [
+    "gmail-msg-f-1862520494500497507",
+    TOLEDO_GMAIL_MSG_ID,
+  ]);
 
   // ---- 2. Verify reservations_cache has data -------------------------------
   // After Wave C, reservations_cache is populated by the Streamline ingest
@@ -49,58 +57,41 @@ async function main() {
     process.exit(1);
   }
 
-  // ---- 3. Stage the fixture into chargeback_inbox --------------------------
-  log.info("staging Toledo email fixture in chargeback_inbox");
+  // ---- 3. Verify fixture is in place (gmail-ingest will read it) ----------
   const fixturePath = resolve(process.cwd(), FIXTURE_PATH);
-  type Fixture = {
-    message_id: string;
-    source_system: string;
-    subject: string;
-    from_address: string;
-    to_address?: string;
-    received_at: string;
-    body: string;
-    body_html?: string | null;
-    metadata?: Record<string, unknown>;
-  };
-  const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
-  const { error: inboxErr } = await sb.from("chargeback_inbox").upsert(
-    {
-      message_id: fixture.message_id,
-      source_system: fixture.source_system,
-      subject: fixture.subject,
-      from_address: fixture.from_address,
-      to_address: fixture.to_address ?? null,
-      received_at: fixture.received_at,
-      body: fixture.body,
-      body_html: fixture.body_html ?? null,
-      processed: false,
-      metadata: fixture.metadata ?? {},
-    },
-    { onConflict: "message_id" },
-  );
-  if (inboxErr) {
-    log.fatal({ err: inboxErr }, "staging failed");
+  try {
+    JSON.parse(readFileSync(fixturePath, "utf8"));
+    log.info({ fixturePath: FIXTURE_PATH }, "gmail fixture present — gmail-ingest will stage it on startup");
+  } catch (err) {
+    log.fatal(
+      { err: err instanceof Error ? err.message : String(err), fixturePath: FIXTURE_PATH },
+      "fixture missing or invalid — cannot run pipeline",
+    );
     process.exit(1);
   }
 
-  // ---- 4. Start the five agents in-process ---------------------------------
-  // Full chargeback pipeline: intake → match → track → dossier → narrative.
-  // Narrative-drafter will fail gracefully if ANTHROPIC_API_KEY isn't set —
-  // dossier.ready still gets emitted either way.
-  log.info("starting inbox-monitor + reservation-matcher + case-tracker + dossier-builder + narrative-drafter");
+  // ---- 4. Start the six agents in-process ---------------------------------
+  // Full chargeback pipeline: gmail-ingest → intake → match → track → dossier → narrative.
+  // gmail-ingest runs in fixture mode (env.GMAIL_INGEST_MODE=fixture) and
+  // stages the Toledo email + emits chargeback.inbox.poll on startup.
+  // Narrative-drafter will fail gracefully if ANTHROPIC_API_KEY isn't set.
+  log.info("starting all 6 chargeback agents (gmail-ingest first so subscribers are ready when it polls)");
+  const gmailPath = "../src/agents/chargeback/gmail-ingest/index.ts";
   const inboxPath = "../src/agents/chargeback/inbox-monitor/index.ts";
   const matcherPath = "../src/agents/chargeback/reservation-matcher/index.ts";
   const trackerPath = "../src/agents/chargeback/case-tracker/index.ts";
   const dossierPath = "../src/agents/chargeback/dossier-builder/index.ts";
   const narrativePath = "../src/agents/chargeback/narrative-drafter/index.ts";
   type AgentModule = { default: { start: () => Promise<void>; stop: () => Promise<void> } };
+  const gmailMod = (await import(gmailPath)) as AgentModule;
   const inboxMod = (await import(inboxPath)) as AgentModule;
   const matcherMod = (await import(matcherPath)) as AgentModule;
   const trackerMod = (await import(trackerPath)) as AgentModule;
   const dossierMod = (await import(dossierPath)) as AgentModule;
   const narrativeMod = (await import(narrativePath)) as AgentModule;
 
+  // Start downstream agents FIRST (so their realtime subscriptions are live)
+  // before gmail-ingest fires its startup poll.
   await Promise.all([
     inboxMod.default.start(),
     matcherMod.default.start(),
@@ -113,23 +104,16 @@ async function main() {
   log.info("holding 3s for subscription handshakes...");
   await new Promise((r) => setTimeout(r, 3000));
 
-  // ---- 5. Publish the poll event ------------------------------------------
-  const correlationId = randomUUID();
-  log.info({ correlationId }, "publishing chargeback.inbox.poll");
-  await publish({
-    event_type: "chargeback.inbox.poll",
-    source_product: "center",
-    source_agent: "run-chargeback-pipeline",
-    correlation_id: correlationId,
-    idempotency_key: `pipeline-run-${Date.now()}`,
-    payload: { triggered_by: "manual_pipeline_test" },
-  });
+  // Now start gmail-ingest, which immediately runs a startup poll, stages
+  // the fixture, and emits chargeback.inbox.poll. The downstream chain cascades.
+  log.info("starting gmail-ingest — startup poll will kick off the chain");
+  await gmailMod.default.start();
 
-  // ---- 6. Wait for full chain to settle -----------------------------------
-  log.info("holding 20s for inbox-monitor -> reservation-matcher -> case-tracker -> dossier-builder -> narrative-drafter (Claude call adds 5-10s)");
+  // ---- 5. Wait for full chain to settle -----------------------------------
+  log.info("holding 20s for gmail-ingest -> inbox-monitor -> reservation-matcher -> case-tracker -> dossier-builder -> narrative-drafter");
   await new Promise((r) => setTimeout(r, 20_000));
 
-  // ---- 7. Inspect results -------------------------------------------------
+  // ---- 6. Inspect results -------------------------------------------------
   const { data: finalCase } = await sb
     .from("chargeback_cases")
     .select(
@@ -140,14 +124,17 @@ async function main() {
 
   const { data: inboxRow } = await sb
     .from("chargeback_inbox")
-    .select("message_id, processed, processed_at, classification, parse_error")
-    .eq("message_id", fixture.message_id)
+    .select("message_id, source_system, processed, processed_at, classification, parse_error")
+    .eq("message_id", TOLEDO_GMAIL_MSG_ID)
     .single();
 
+  // Correlation is chained from gmail-ingest's emit — inspect events since
+  // the pipeline started (trailing 60s window) rather than filtering by a
+  // pre-known correlation_id.
   const { data: allEvents } = await sb
     .from("events")
     .select("event_id, event_type, source_agent, correlation_id, occurred_at")
-    .eq("correlation_id", correlationId)
+    .gt("occurred_at", new Date(Date.now() - 60_000).toISOString())
     .order("occurred_at", { ascending: true });
 
   // Gather downstream events (triggered by inbox-monitor's emit, which generates
@@ -178,8 +165,8 @@ async function main() {
   log.info({ finalCase }, "final chargeback_cases row");
   log.info({ inboxRow }, "inbox row state");
   log.info(
-    { pollEvents: allEvents?.map((e) => `${e.occurred_at}  ${e.event_type}  (by ${e.source_agent})`) },
-    `events with the poll correlation_id: ${allEvents?.length ?? 0}`,
+    { pipelineEvents: allEvents?.map((e) => `${e.occurred_at}  ${e.event_type}  (by ${e.source_agent})`) },
+    `events in the last 60s: ${allEvents?.length ?? 0}`,
   );
   log.info(
     { downstreamEvents: downstreamEvents.map((e) => `${e.occurred_at}  ${e.event_type}  (by ${e.source_agent})`) },
@@ -190,8 +177,9 @@ async function main() {
     `audit entries: ${auditEntries?.length ?? 0}`,
   );
 
-  // ---- 8. Shut down --------------------------------------------------------
+  // ---- 7. Shut down --------------------------------------------------------
   await Promise.all([
+    gmailMod.default.stop(),
     inboxMod.default.stop(),
     matcherMod.default.stop(),
     trackerMod.default.stop(),

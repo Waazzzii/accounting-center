@@ -149,13 +149,21 @@ class InboxMonitor extends AgentBase {
   // -------------------------------------------------------------------------
 
   protected async onStart(): Promise<void> {
-    const unsub = this.on(
-      { event_type: "chargeback.inbox.poll" },
-      async (ev) => { await this.handlePoll(ev); },
+    // chargeback.inbox.poll — external "please scan now" trigger (orchestrator,
+    // manual trigger). chargeback.inbox.staged — gmail-ingest finished staging
+    // new rows. Both resolve to the same handler (scan unprocessed rows).
+    this.unsubscribers.push(
+      this.on({ event_type: "chargeback.inbox.poll" }, async (ev) => {
+        await this.handlePoll(ev);
+      }),
     );
-    this.unsubscribers.push(unsub);
+    this.unsubscribers.push(
+      this.on({ event_type: "chargeback.inbox.staged" }, async (ev) => {
+        await this.handlePoll(ev);
+      }),
+    );
 
-    this.log.info("inbox monitor online — listening for chargeback.inbox.poll");
+    this.log.info("inbox monitor online — listening for chargeback.inbox.poll + chargeback.inbox.staged");
   }
 
   protected async onStop(): Promise<void> {

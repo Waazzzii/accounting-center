@@ -310,6 +310,14 @@ events:
   # ---------------------------------------------------------------------------
   # CHARGEBACK (Phase 4)
   # ---------------------------------------------------------------------------
+  - type: chargeback.inbox.staged
+    source: chargeback
+    version: 1
+    description: gmail-ingest staged one or more new rows in chargeback_inbox. inbox-monitor scans and processes.
+    consumers: [inbox-monitor]
+    idempotency: none (one per poll cycle)
+    severity: info
+
   - type: chargeback.case.notified
     source: chargeback
     version: 1

@@ -36,7 +36,13 @@ const EnvSchema = z.object({
   INTACCT_COMPANY_ID: z.string().optional(),
   STRIPE_API_KEY: z.string().optional(),
   SLACK_BOT_TOKEN: z.string().optional(),
+  // Gmail — OAuth2 "Desktop" app flow
+  GMAIL_CLIENT_ID: z.string().optional(),
+  GMAIL_CLIENT_SECRET: z.string().optional(),
   GMAIL_REFRESH_TOKEN: z.string().optional(),
+  GMAIL_USER_EMAIL: z.string().email().default("accounting@acmehouseco.com"),
+  GMAIL_INGEST_MODE: z.enum(["live", "fixture", "off"]).default("fixture"),
+  GMAIL_FIXTURE_DIR: z.string().default("fixtures/gmail-prod"),
 
   // Ops
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
