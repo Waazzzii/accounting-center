@@ -262,6 +262,63 @@ events:
     idempotency: packet_id
     severity: info
 
+  # 3-way match events (added 2026-04-20)
+  - type: otaauditor.deposit.ingested
+    source: otaauditor
+    version: 1
+    description: A bank deposit was observed (Column Bank webhook, CSV import, or manual).
+    consumers: [matching-engine]
+    idempotency: source_system + bank_transaction_id
+    severity: info
+
+  - type: otaauditor.deposit.classified
+    source: otaauditor
+    version: 1
+    description: A bank deposit has been classified (ota_deposit / possible_ota / internal / etc.).
+    consumers: [matching-engine, dashboard-builder]
+    idempotency: deposit_id + classified_at
+    severity: info
+
+  - type: otaauditor.sweep.poll
+    source: otaauditor
+    version: 1
+    description: Trigger a matching-engine sweep of unmatched payouts + deposits.
+    consumers: [matching-engine]
+    idempotency: none (run-per-trigger)
+    severity: info
+
+  - type: otaauditor.match.created
+    source: otaauditor
+    version: 1
+    description: matching-engine produced a match record.
+    consumers: [gl-verifier, dashboard-builder, kpi-computer]
+    idempotency: match_id
+    severity: info
+
+  - type: otaauditor.match.verified
+    source: otaauditor
+    version: 1
+    description: gl-verifier confirmed the match posted correctly to Sage Intacct.
+    consumers: [dashboard-builder, kpi-computer]
+    idempotency: match_id + verified_at
+    severity: info
+
+  - type: otaauditor.match.exception
+    source: otaauditor
+    version: 1
+    description: An exception was raised requiring human review (variance, GL mismatch, stale).
+    consumers: [exception-manager, alert-router, dashboard-builder]
+    idempotency: exception_id
+    severity: warn
+
+  - type: otaauditor.unmatched.aged
+    source: otaauditor
+    version: 1
+    description: An unmatched item crossed a severity threshold (yellow/red).
+    consumers: [exception-manager, alert-router]
+    idempotency: unmatched_id + severity
+    severity: warn
+
   # ---------------------------------------------------------------------------
   # REVPOST (Phase 3)
   # ---------------------------------------------------------------------------
