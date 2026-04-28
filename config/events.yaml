@@ -263,6 +263,14 @@ events:
     severity: info
 
   # 3-way match events (added 2026-04-20)
+  - type: otaauditor.scraper.poll
+    source: otaauditor
+    version: 1
+    description: Trigger payout-scraper to synthesize OTA payout reports from Streamline + CSV imports.
+    consumers: [payout-scraper]
+    idempotency: none (run-per-trigger)
+    severity: info
+
   - type: otaauditor.deposit.ingested
     source: otaauditor
     version: 1

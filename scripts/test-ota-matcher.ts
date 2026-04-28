@@ -270,7 +270,9 @@ async function main() {
   await seed();
 
   log.info("starting matching-engine...");
-  const mod = (await import("../src/agents/otaauditor/matching-engine/index.ts")) as {
+  // Path as variable so tsc doesn't flag the .ts extension
+  const matcherPath = "../src/agents/otaauditor/matching-engine/index.ts";
+  const mod = (await import(matcherPath)) as {
     default: {
       start: () => Promise<void>;
       stop: () => Promise<void>;
@@ -293,14 +295,7 @@ async function main() {
     .order("created_at", { ascending: false })
     .limit(20);
 
-  const { data: unmatchedRows } = await sb
-    .from("ota_unmatched")
-    .select("entity_type, entity_id, category, severity, age_days, reason")
-    .like("reason", `%${FIXTURE_TAG}%`)
-    .order("detected_at", { ascending: false })
-    .limit(20);
-
-  // Unmatched doesn't contain FIXTURE_TAG in reason — re-select by recent
+  // Unmatched: query by recent rather than FIXTURE_TAG (reason text doesn't carry the tag)
   const recentCutoff = new Date(Date.now() - 60_000).toISOString();
   const { data: recentUnmatched } = await sb
     .from("ota_unmatched")
