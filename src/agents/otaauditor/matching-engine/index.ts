@@ -60,7 +60,10 @@ const MAX_FUZZY_AMOUNT_PCT       = 0.02;
 const MAX_FUZZY_DATE_DAYS        = 5;
 
 // Subset-sum: cap the number of elements to avoid O(2^N) explosion.
-const MAX_SUBSET_ELEMENTS        = 4;
+// Airbnb batches up to ~6 reservations per ACH in practice; candidate pools
+// are capped (closest-by-date first) so C(n,k) stays bounded.
+const MAX_SUBSET_ELEMENTS        = 6;
+const MAX_SUBSET_CANDIDATES      = 25;
 
 // Default sweep window (days)
 const DEFAULT_SWEEP_DAYS         = 7;
@@ -747,9 +750,11 @@ function* splitPayoutPass(
 ): Generator<ScoredMatch> {
   for (const p of payouts) {
     if (!unmatchedP.has(p.report_id)) continue;
-    const candidates = deposits.filter(
-      (d) => unmatchedD.has(d.deposit_id) && Math.abs(daysBetween(p.payout_date, d.deposit_date)) <= 3,
-    );
+    const candidates = deposits
+      .filter((d) => unmatchedD.has(d.deposit_id) && Math.abs(daysBetween(p.payout_date, d.deposit_date)) <= 3)
+      .sort((a, b) =>
+        Math.abs(daysBetween(p.payout_date, a.deposit_date)) - Math.abs(daysBetween(p.payout_date, b.deposit_date)))
+      .slice(0, MAX_SUBSET_CANDIDATES);
     for (let size = 2; size <= Math.min(MAX_SUBSET_ELEMENTS, candidates.length); size++) {
       const subset = findSubsetSum(
         candidates.map((d) => d.amount),
@@ -792,9 +797,11 @@ function* batchedDepositPass(
 ): Generator<ScoredMatch> {
   for (const d of deposits) {
     if (!unmatchedD.has(d.deposit_id)) continue;
-    const candidates = payouts.filter(
-      (p) => unmatchedP.has(p.report_id) && Math.abs(daysBetween(p.payout_date, d.deposit_date)) <= 5,
-    );
+    const candidates = payouts
+      .filter((p) => unmatchedP.has(p.report_id) && Math.abs(daysBetween(p.payout_date, d.deposit_date)) <= 5)
+      .sort((a, b) =>
+        Math.abs(daysBetween(a.payout_date, d.deposit_date)) - Math.abs(daysBetween(b.payout_date, d.deposit_date)))
+      .slice(0, MAX_SUBSET_CANDIDATES);
     for (let size = 2; size <= Math.min(MAX_SUBSET_ELEMENTS, candidates.length); size++) {
       const subset = findSubsetSum(
         candidates.map((p) => p.net_amount),
