@@ -50,7 +50,7 @@ const IDENTITY: AgentIdentity = {
  * tolerance absorbs the slop.
  */
 const CHANNEL_SETTLEMENT_LAG_DAYS: Record<string, number> = {
-  airbnb:      1,    // ~24h after check-in (Airbnb policy)
+  airbnb:      3,    // released 24h after check-in; ACH lands 2-4 business days later (measured against real BofC data)
   vrbo:        2,    // ~next business day after check-in via Lynnbrook
   booking_com: 30,   // monthly invoice in arrears
   direct:      1,    // Stripe / Lynnbrook next business day
@@ -63,11 +63,16 @@ const CHANNEL_SETTLEMENT_LAG_DAYS: Record<string, number> = {
  * ota_channel_fees table is the source of truth once populated per-property.
  */
 const CHANNEL_HOST_FEE_PCT: Record<string, number> = {
-  airbnb:      0.03,   // host-only fee model
+  airbnb:      0.0,    // host fee is bundled into rent (guest pays it) — payout = total − taxes
   vrbo:        0.05,   // pay-per-booking
   booking_com: 0.15,   // commission model
   direct:      0.029,  // Stripe / Lynnbrook ~2.9% + $0.30
 };
+
+// Airbnb collects & remits occupancy taxes itself — its payout excludes the
+// tax line items on the folio. Measured against real BofC ACHs: expected =
+// total − taxes lands within ~0.1%.
+const CHANNELS_TAXES_WITHHELD = new Set<string>(["airbnb"]);
 
 const DEFAULT_LOOKBACK_DAYS = 30;
 const SUPPORTED_CHANNELS = ["airbnb", "vrbo", "booking_com", "direct"] as const;
@@ -89,6 +94,7 @@ interface ReservationCacheRow {
   guest_name: string;
   confirmation_code: string | null;
   status: string | null;
+  taxes_total: number;             // sum of is_tax folio line items
 }
 
 interface SynthesizedPayout {
@@ -301,7 +307,7 @@ class OtaPayoutScraper extends AgentBase {
     const { data, error } = await sb
       .from("reservations_cache")
       .select(
-        "reservation_id, channel, check_in, check_out, total_amount, currency, property_id, property_name, guest_name, confirmation_code, status",
+        "reservation_id, channel, check_in, check_out, total_amount, currency, property_id, property_name, guest_name, confirmation_code, status, folio_data",
       )
       .gte("check_out", sinceDate)
       .lte("check_out", today())
@@ -313,19 +319,27 @@ class OtaPayoutScraper extends AgentBase {
       this.log.error({ err: error.message }, "loadReservations failed");
       return [];
     }
-    return (data ?? []).map((r) => ({
-      reservation_id: r.reservation_id as string,
-      channel: r.channel as string | null,
-      check_in: r.check_in as string,
-      check_out: r.check_out as string,
-      total_amount: Number(r.total_amount),
-      currency: r.currency as string,
-      property_id: r.property_id as string | null,
-      property_name: r.property_name as string | null,
-      guest_name: r.guest_name as string,
-      confirmation_code: r.confirmation_code as string | null,
-      status: r.status as string | null,
-    }));
+    return (data ?? []).map((r) => {
+      const lineItems =
+        ((r.folio_data as { line_items?: Array<{ value: number; is_tax: boolean }> } | null)?.line_items) ?? [];
+      const taxesTotal = lineItems
+        .filter((li) => li.is_tax)
+        .reduce((sum, li) => sum + Number(li.value), 0);
+      return {
+        reservation_id: r.reservation_id as string,
+        channel: r.channel as string | null,
+        check_in: r.check_in as string,
+        check_out: r.check_out as string,
+        total_amount: Number(r.total_amount),
+        currency: r.currency as string,
+        property_id: r.property_id as string | null,
+        property_name: r.property_name as string | null,
+        guest_name: r.guest_name as string,
+        confirmation_code: r.confirmation_code as string | null,
+        status: r.status as string | null,
+        taxes_total: taxesTotal,
+      };
+    });
   }
 }
 
@@ -334,13 +348,22 @@ class OtaPayoutScraper extends AgentBase {
 // ---------------------------------------------------------------------------
 
 export function synthesizePayouts(reservations: ReservationCacheRow[]): SynthesizedPayout[] {
-  // Group by (channel, settlement_date)
+  // Airbnb pays PER RESERVATION ~24h after check-IN (verified against real
+  // BofC feed data — 406 individual Airbnb ACHs in a 6-week window). Every
+  // other channel groups by (channel, settlement_date): Lynnbrook batches
+  // direct+VRBO daily, Booking.com invoices monthly.
   const groups = new Map<string, ReservationCacheRow[]>();
   for (const r of reservations) {
     const channel = r.channel as SupportedChannel | null;
     if (!channel || !SUPPORTED_CHANNELS.includes(channel)) continue;
-    const settlementDate = estimateSettlementDate(r.check_out, channel);
-    const key = `${channel}|${settlementDate}`;
+    let key: string;
+    if (channel === "airbnb") {
+      const settlementDate = shiftDate(r.check_in, CHANNEL_SETTLEMENT_LAG_DAYS.airbnb ?? 1);
+      key = `${channel}|${settlementDate}|${r.reservation_id}`;   // per-reservation
+    } else {
+      const settlementDate = estimateSettlementDate(r.check_out, channel);
+      key = `${channel}|${settlementDate}`;
+    }
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
   }
@@ -353,9 +376,11 @@ export function synthesizePayouts(reservations: ReservationCacheRow[]): Synthesi
 
     let gross = 0;
     let fees = 0;
+    const withholdsTaxes = CHANNELS_TAXES_WITHHELD.has(channel);
     const lineItems = items.map((r) => {
       const itemGross = r.total_amount;
-      const itemFee = round2(itemGross * feePct);
+      const taxWithheld = withholdsTaxes ? round2(r.taxes_total) : 0;
+      const itemFee = round2((itemGross - taxWithheld) * feePct + taxWithheld);
       const itemNet = round2(itemGross - itemFee);
       gross = round2(gross + itemGross);
       fees = round2(fees + itemFee);

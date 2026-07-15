@@ -95,9 +95,13 @@ const RULES: Array<{ pattern: RegExp; result: ClassResult }> = [
   // Hopper-named internal transfer memos (TRF HOPPER = inter-account transfer, NOT the OTA)
   { pattern: /FUNDS TRANSFER FRMDEP|TRF HOPPER/i,
     result: { classification: "internal_transfer", confidence: 0.9, otaSource: null, otaConfidence: null, counterparty: "Internal / sweep" } },
-  // Amex settles outside the main merchant batch
+  // BPal-Amex: BookingPal channel volume settling via American Express
+  // (confirmed by Jason 2026-07-14 — this is a CHANNEL, not Lynnbrook)
   { pattern: /AMERICAN EXPRESS\s+SETTLEMENT/i,
-    result: { classification: "merchant_deposit", confidence: 0.97, otaSource: null, otaConfidence: null, counterparty: "Lynnbrook (Amex settlement)" } },
+    result: { classification: "ota_deposit", confidence: 0.9, otaSource: "other", otaConfidence: 0.85, counterparty: "BPal-Amex (BookingPal)" } },
+  // CrewDogs — crew-housing OTA channel
+  { pattern: /CREWDOGS|CREW\s*DOGS/i,
+    result: { classification: "ota_deposit", confidence: 0.9, otaSource: "other", otaConfidence: 0.9, counterparty: "CrewDogs" } },
   // Channel payouts
   { pattern: /AIRBNB/i,
     result: { classification: "ota_deposit", confidence: 0.95, otaSource: "airbnb", otaConfidence: 0.95, counterparty: "Airbnb" } },
@@ -106,7 +110,7 @@ const RULES: Array<{ pattern: RegExp; result: ClassResult }> = [
   { pattern: /BOOKING\.?COM|BOOKING\s+BV/i,
     result: { classification: "ota_deposit", confidence: 0.9, otaSource: "booking_com", otaConfidence: 0.9, counterparty: "Booking.com" } },
   { pattern: /MARRIOTT/i,
-    result: { classification: "ota_deposit", confidence: 0.9, otaSource: "other", otaConfidence: 0.9, counterparty: "Marriott (HVMB)" } },
+    result: { classification: "ota_deposit", confidence: 0.9, otaSource: "other", otaConfidence: 0.9, counterparty: "Boost-Marriott" } },
   { pattern: /EXPEDIA/i,
     result: { classification: "ota_deposit", confidence: 0.85, otaSource: "other", otaConfidence: 0.85, counterparty: "Expedia" } },
   // Internal movement — never OTA-matched
