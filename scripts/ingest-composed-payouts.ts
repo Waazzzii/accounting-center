@@ -42,13 +42,22 @@ interface Fixture {
   records: WpRecord[];
 }
 
+// US bank (Federal Reserve) holidays — ACHs don't settle on these days.
+// Discovered the hard way: Memorial Day 2026 shifted $72K of composed groups
+// to a day the bank was closed, breaking $53K+ of otherwise-exact matches.
+const US_BANK_HOLIDAYS_2026 = new Set([
+  "2026-01-01", "2026-01-19", "2026-02-16", "2026-05-25", "2026-06-19",
+  "2026-07-03", "2026-09-07", "2026-10-12", "2026-11-11", "2026-11-26", "2026-12-25",
+]);
+
 function addBusinessDays(dateIso: string, n: number): string {
   const d = new Date(`${dateIso.slice(0, 10)}T12:00:00Z`);
   let left = n;
   while (left > 0) {
     d.setUTCDate(d.getUTCDate() + 1);
     const dow = d.getUTCDay();
-    if (dow !== 0 && dow !== 6) left--;
+    const iso = d.toISOString().slice(0, 10);
+    if (dow !== 0 && dow !== 6 && !US_BANK_HOLIDAYS_2026.has(iso)) left--;
   }
   return d.toISOString().slice(0, 10);
 }
