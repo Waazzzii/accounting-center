@@ -1,0 +1,17 @@
+{
+  "message_id": "gmail-msg-f-1862520494500497507",
+  "source_system": "fixture",
+  "subject": "[Ext] Casago Coachella Valley ST Chargeback Risk - Ref #144522240 - Unresponded",
+  "from_address": "customerservice@aptx.cm",
+  "to_address": "jason@acmehouseco.com",
+  "received_at": "2026-04-15T07:25:00Z",
+  "body": "External Sender - From: (customerservice@aptx.cm)\nThis message came from outside your organization.\n\nThis is your Account ID: 156919\n\nChargeback Risk\n\nFROM: ADMIN@ACMEHOUSECO.COM\n\nReference #:        144522240\nDate:               22 Mar 2026 05:50:43 PDT\nName:               Jason Toledo\nEmail:              jrtoledo11@icloud.com\nPhone:              (312) 434-2268\nPayment Method:     American Express Credit Card #3008\nPayment Amount:     $3,679.00\nReason:             Cancelled Merchandise/Services\nReason:             Unresponded\n\nYou are subscribed to receive this email.",
+  "body_html": null,
+  "metadata": {
+    "gmail_thread_id": "thread-f:1862520494500497507",
+    "gmail_labels": ["INBOX", "Chargeback \u2014 Open"],
+    "lynnbrook_account_id": "156919",
+    "account_owner": "ADMIN@ACMEHOUSECO.COM",
+    "source_note": "Real email received 2026-04-15; used as verbatim fixture for end-to-end pipeline validation."
+  }
+}

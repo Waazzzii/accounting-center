@@ -1,0 +1,89 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+secrets/
+supabase/.branches
+supabase/.temp
+
+# Real customer data — NEVER commit
+# Streamline pulls contain guest names, emails, phones, payment amounts.
+fixtures/streamline/
+fixtures/gmail-prod/
+fixtures/ramp/
+fixtures/sage/
+# Chargeback fixtures — only the Toledo test case is committed (already known
+# internally); any other files here are presumed to contain PII.
+fixtures/chargeback-inbox/*
+!fixtures/chargeback-inbox/toledo-144522240.json
+
+# Dependencies
+node_modules/
+.pnpm-store/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Build artifacts
+dist/
+build/
+out/
+.next/
+.nuxt/
+coverage/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.cursor/
+Thumbs.db
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
+
+# Test / coverage
+.nyc_output/
+coverage/
+*.lcov
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+.cache/
+
+# MCP session data
+.mcp-sessions/
+
+# Agent state (local dev)
+state/
+tmp/
+
+# Database dumps (large)
+*.dump
+*.sql.gz
+
+# Uploaded / generated artifacts
+uploads/
+exports/
+archives/
