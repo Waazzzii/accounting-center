@@ -97,3 +97,39 @@ Called with empty params via passthrough → `E0191 "Owners statements was not f
 
 ### What's missing / next action
 Ask Streamline support to add to the token allowlist: `GetUnitOwnerBalance` (and any owner-balance bulk variant), owner-ledger transaction methods, and whatever method backs the Accounting > Wholesale Statements screen (exact name unknown — the screen may be UI/report-only). Until then: GAD and payout composition come from the reservation-level API; owner balance, vendor liability, and the payout reference # must come from Sage / the payout scraper / statement PDFs.
+
+---
+
+## Pilot results (2026-05-26 batch)
+
+**Question:** can Wholesale Payment folio records reconstruct which reservations compose each Airbnb bank deposit? **Target:** the ten "AIRBNB PAYMENTST" ACHs on GL 102110 dated 2026-05-26 (39,490.22 / 29,979.09 / 26,612.15 / 16,127.47 / 7,909.53 / 6,404.89 / 2,958.21 / 1,720.38 / 970.38 / 882.14 — total $133,054.46).
+
+**Data pulled (2026-07-15):** 254 airbnb reservations in `reservations_cache` with check_in 2026-05-18..05-26. Folio history fetched via MCP `get_reservation_info(show_payments_folio_history)` for 74 of them — complete coverage of the 05-23/05-24/05-25 check-in cohorts + 10 spot checks in earlier cohorts (call budget stopped a full sweep; ci 05-21 has 45 and ci 05-22 has 111 unfetched). 78 Wholesale Payment records extracted → `fixtures/streamline/wholesale-payments-pilot.json`. (Direct-API sweep was attempted first but the `.env` STREAMLINE_API_KEY/SECRET are rejected with E0010 "Token is invalid" at `web.streamlinevrs.com/api/json` — stale creds; the MCP connector works.)
+
+### Mechanics confirmed
+- Every paid-out reservation carries a `Wholesale Payment` record with exact payout amount and `transaction_date` = the payout_notification timestamp. Records written by one notification batch share a timestamp to within a few seconds (e.g. `05/25/2026 02:03:29` ×4, `05/24/2026 03:46:31` ×8).
+- **Settlement lag:** notification day + 1 business day. Memorial-day weekend notifications (Fri 05/22–Mon 05/25) all settled Tue 05/26 — hence ten ACHs on one day. Check-in 05/25 reservations notified 05/26 and are correctly *absent* from this batch (negative control ✓).
+- **Payout amount ≠ reservation total** in general: alterations/extensions pay out in parts (e.g. conf 18202: 556.01 + 154.87 on different days; conf 18375: 2,025.60 + 368.59; conf 18042 (45-night stay): 3,539.73 + monthly installments in June). The folio record amounts are the ground truth.
+- **Not all payouts land in GL 102110.** In-window notifications for AZ-market units (e.g. the 05/25 04:12 cluster: Pine House, Flagstaff Fantasy, Canyon Lookout… = $1,767.04) match none of the ten ACHs — they route to other bank accounts. The folio record does NOT expose the payout bank account, so multi-account mornings must be resolved by sum-matching.
+
+### Decomposition of the ten ACHs (timestamp-cluster method)
+| ACH 05/26 | Status | Composition |
+|---|---|---|
+| $6,404.89 | **MATCHED exact** | notify 05/25 01:51:51 — conf 17658 ($2,300.30), 18375 ($2,025.60 partial), 18377 ($2,078.99) |
+| $7,909.53 | **MATCHED exact** | notify 05/25 02:03:29 — conf 16125 ($1,879.23), 16126 ($1,770.18), 16217 ($1,696.22), 16423 ($2,563.90) |
+| $1,720.38 | **MATCHED exact** | notify 05/25 05:25:21 — conf 17936 ($1,720.38) |
+| $2,958.21 | **MATCHED exact*** | notify 05/23 04:14:46–51 — conf 16068 ($1,327.20), 15676 ($598.41), 15978 ($407.15), 16591 ($625.45). *Exact sum, but the 05-22 cohort is only spot-checked, so membership is high-confidence-not-proven |
+| $26,612.15 | Partially explained | notify 05/25 02:14:51 cluster: 23 records summing $21,541.66 (81%) identified; residual $5,070.49 must be delayed/split payouts from unfetched ci ≤ 05-22 folios |
+| $16,127.47 | Partially explained | 05/24 notify clusters: $14,371.52 of member records identified (02:13/02:46/03:46/04:13/11:51 timestamps); residual $1,755.95 unfetched |
+| $39,490.22 | Unexplained (data gap) | composition sits in the unfetched ci 05-21/05-22 folios (notify 05/22–05/23) |
+| $29,979.09 | Unexplained (data gap) | same |
+| $970.38 | Unexplained | likely includes conf 17937 ($242.99, notify 05/25 05:25:20); remainder unfetched |
+| $882.14 | Unexplained | unfetched |
+
+Fully decomposed: **4 of 10 ACHs**; member records identified for ~$55k of the $133k batch (≈41% of dollars, limited purely by fetch budget, not by the method).
+
+### Key negative finding — subset-sum on cache totals is NOT safe
+A naive subset-sum of `reservations_cache.total_amount` against the ten ACH amounts "explained" 9/10 ACHs to the cent — and the folio data proved at least two of those compositions **wrong** (the true $7,909.53 and $6,404.89 members are different reservations sharing a payout timestamp). With 254 candidates the combinatorics produce exact-cent false positives. Composition must be timestamp-anchored folio records, with subset-sum only *within* a notification-day pool (to split same-morning multi-account batches).
+
+### Verdict & scaling
+The approach works and scales, with one requirement: **full folio sweep of the check-in window** (check_in from settlement−5d to settlement−1d, ≈250 reservations/week, N+1 `GetReservationInfo` calls — no bulk endpoint on the allowlist). Recommended production shape: nightly incremental job pulls folios for reservations with check_in in the last 7 days (plus open long-stays), upserts a `wholesale_payments` table keyed on (confirmation_id, transaction_date, amount), then the matcher groups by notification day, subset-sums against each bank ACH within that day, and flags residuals. The unresolved gap remains the payout→bank-account mapping (folio has no account field); the Airbnb payout scraper (wave 2) or per-listing payout-routing config is needed to pre-partition multi-account mornings.
