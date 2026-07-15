@@ -69,9 +69,23 @@ interface ClassResult {
 }
 
 const RULES: Array<{ pattern: RegExp; result: ClassResult }> = [
-  // Owner payout ACH batches (cash out) — 849 rows / -$933K in the Jun-Jul sample
-  { pattern: /ACH DEBIT\s*-\s*Owner Payments/i,
+  // Reversed transactions — surface for review, never match (the underlying
+  // and the reversal must reconcile to zero; exception-manager territory)
+  { pattern: /^Reversed\s*--/i,
+    result: { classification: "unknown", confidence: 0.9, otaSource: null, otaConfidence: null, counterparty: "REVERSAL — needs review" } },
+  // Owner payout ACH batches (cash out) — 849 rows / -$933K in the Jun-Jul sample.
+  // May variant: "PREAUTHORIZED ACH DEBIT ACME House Compa Apr 26 ACM" (per-month batch)
+  { pattern: /ACH DEBIT\s*-\s*Owner Payments|ACH DEBIT ACME House Compa/i,
     result: { classification: "owner_distribution", confidence: 0.98, otaSource: null, otaConfidence: null, counterparty: "Owner payout batch" } },
+  // Checks written from trust (vendor/owner checks)
+  { pattern: /CHECK PAID/i,
+    result: { classification: "vendor_payment", confidence: 0.85, otaSource: null, otaConfidence: null, counterparty: "Check" } },
+  // Utility / municipal ACH debits from trust (Mgmt-CO-unit expense per OPM)
+  { pattern: /DESERT WATER AGENCY|City of La Quint|SO CAL EDISON|SOCALGAS|COACHELLA VALLEY WATER/i,
+    result: { classification: "vendor_payment", confidence: 0.9, otaSource: null, otaConfidence: null, counterparty: "Utility / municipality" } },
+  // Amex chargebacks + collections clawbacks (cash out via BPal-Amex rail)
+  { pattern: /AMERICAN EXPRESS\s+(CHGBCK\/ADJ|COLLECTION|AXP DISCNT)/i,
+    result: { classification: "refund", confidence: 0.9, otaSource: null, otaConfidence: null, counterparty: "BPal-Amex clawback/chargeback/fee" } },
   // Tax remittances
   { pattern: /AZ DEPT OF REV|CITYOFPALMSPRING|CA DEPT TAX|CDTFA|DEPT OF REV/i,
     result: { classification: "tax_remittance", confidence: 0.95, otaSource: null, otaConfidence: null, counterparty: "Tax authority" } },
